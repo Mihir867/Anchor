@@ -1,0 +1,43 @@
+# Python Virtual Environments
+ai-engine/venv/
+venv/
+ENV/
+env/
+
+# Python Cache & Bytecode
+__pycache__/
+*.py[cod]
+*$py.class
+.pytest_cache/
+
+# Node.js & Frontend/Backend dependencies
+node_modules/
+client/node_modules/
+server/node_modules/
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# Build outputs & Bundles
+client/dist/
+client/build/
+.next/
+dist/
+
+# Environment Variables (Secrets, API keys)
+.env
+.env.local
+.env.*.local
+*.env
+
+# Crawler Output Artifacts (Temporary test outputs)
+ai-engine/output_visuals.json
+ai-engine/hero_screenshot.png
+*.png
+*.jpg
+*.jpeg
+
+# OS & Editor specific files
+.DS_Store
+.vscode/
+.idea/
