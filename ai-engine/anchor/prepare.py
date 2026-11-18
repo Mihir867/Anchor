@@ -1,0 +1,160 @@
+"""URL -> TaskPack (crawl, extract, research, classify). Runs ONCE per run.
+
+Everything downstream -- every Harness² rollout, the selector, the improver -- reads this
+frozen pack, so all candidates are compared on identical evidence.
+"""
+
+from __future__ import annotations
+
+import asyncio
+import json
+import logging
+import re
+from datetime import datetime, timezone
+from pathlib import Path
+from urllib.parse import urlparse
+
+from bs4 import BeautifulSoup
+
+from . import crawl, extract, harness, research
+from .config import Settings
+from .llm import LLM, LLMError
+from .models import BrandKit, Evidence, SkillChoice, TaskPack
+
+log = logging.getLogger("anchor.prepare")
+MIN_EVIDENCE = 4
+
+
+class PrepareError(RuntimeError):
+    pass
+
+
+def normalize_url(url: str) -> str:
+    url = url.strip()
+    return url if urlparse(url).scheme else "https://" + url.lstrip("/")
+
+
+def task_id_for(url: str) -> str:
+    host = urlparse(url).netloc.removeprefix("www.")
+    slug = re.sub(r"[^a-z0-9]+", "-", host.lower()).strip("-")
+    return f"{slug}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
+
+
+def classify(h: harness.Harness, text: str, ld_types: set[str], cfg: Settings) -> tuple[str, str]:
+    """Industry = the skill whose keywords/schema types best match. LLM only breaks ties."""
+    industries = {n: s for n, s in h.skills.items() if s.meta.get("industry")}
+    if not industries:
+        raise PrepareError("the harness has no industry skills (frontmatter `industry: true`)")
+    low = text.lower()
+    scores: dict[str, float] = {}
+    for name, skill in industries.items():
+        kw = sum(len(re.findall(rf"\b{re.escape(k.lower())}\b", low)) for k in skill.list_meta("keywords"))
+        st = sum(4 for t in skill.list_meta("schema_types") if t in ld_types)
+        scores[name] = min(kw, 12) + st
+    ranked = sorted(scores, key=scores.get, reverse=True)
+    best, second = ranked[0], (ranked[1] if len(ranked) > 1 else None)
+    margin = scores[best] - (scores[second] if second else 0)
+    reason = f"keyword/schema scores {scores}"
+    if scores[best] >= 3 and margin >= 3:
+        return best, reason
+    try:
+        menu = "\n".join(f"- {n}: {s.description}" for n, s in industries.items())
+        choice = LLM(cfg.model, cfg=cfg).json(
+            "You classify a business into exactly one playbook.",
+            f"Playbooks:\n{menu}\n\nBusiness homepage text (truncated):\n{text[:3500]}\n\n"
+            "Pick the single best playbook name.",
+            SkillChoice,
+            temperature=0.0,
+        )
+        lookup = {n.lower(): n for n in industries}
+        picked = next((lookup[s.strip().lower()] for s in choice.skills if s.strip().lower() in lookup), None)
+        if picked:
+            return picked, f"{reason}; tie broken by model -> {picked}"
+    except LLMError as exc:
+        log.warning("industry tie-break failed: %s", exc)
+    return best, reason + "; low-confidence, highest score used"
+
+
+def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = None,
+            industry: str | None = None) -> tuple[TaskPack, Path]:
+    url = normalize_url(url)
+    task_id = task_id or task_id_for(url)
+    run_dir = cfg.runs_dir / task_id
+    pack_dir = run_dir / "pack"
+    assets = pack_dir / "assets"
+    log.info("[prepare] %s -> %s", url, run_dir)
+
+    home = asyncio.run(crawl.crawl_home(url, assets))
+    soup = BeautifulSoup(home.home.html, "html.parser")
+    ld = extract.json_ld(soup)
+    name = extract.brand_name(home.home, home.tokens, ld)
+    home_text = " ".join([home.tokens.get("title", ""), home.tokens.get("description", ""),
+                          home.tokens.get("h1", ""), extract.clean(soup.get_text(" "))[:6000]])
+    h = harness.load(cfg.harness_dir)
+    ld_types = {t for item in ld for t in extract._types(item)}
+    if industry and industry in h.skills:
+        reason = "forced by caller"
+    else:
+        industry, reason = classify(h, home_text, ld_types, cfg)
+    skill = h.skills[industry]
+    log.info("[prepare] brand=%r industry=%s (%s)", name, industry, reason)
+
+    urls = crawl.candidate_urls(home, skill.list_meta("crawl_paths"), cfg.max_pages)
+    pages = asyncio.run(crawl.crawl_pages(urls, cfg.max_pages))
+    site_items, extras = extract.site_evidence(home.home, pages)
+    domain = urlparse(home.url).netloc.removeprefix("www.")
+    news_items = research.news_evidence(name, domain, skill.list_meta("news_queries"), cfg.max_articles)
+
+    ranked = sorted(site_items + news_items, key=lambda d: d.pop("_rank", 0), reverse=True)[:70]
+    evidence = [Evidence(id=f"E{i}", **d) for i, d in enumerate(ranked, start=1)]
+    if len(evidence) < MIN_EVIDENCE:
+        raise PrepareError(
+            f"only {len(evidence)} evidence items found for {url}; refusing to write posts without "
+            "verifiable material (site may block crawlers or be mostly images)"
+        )
+
+    t = home.tokens
+    colors = t.get("ranked_colors") or []
+    brand = BrandKit(
+        url=home.url, domain=domain, name=name,
+        tagline=extract.clean(t.get("h1", ""))[:160], description=extract.clean(t.get("description", ""))[:300],
+        primary_color=colors[0] if colors else "#111827",
+        secondary_color=colors[1] if len(colors) > 1 else None,
+        accent_colors=colors[2:6],
+        background_color=t.get("background") or "#FFFFFF", text_color=t.get("text") or "#111111",
+        heading_font=t.get("heading_font"), body_font=t.get("body_font"),
+        font_faces=t.get("font_faces", []), logo_path=home.logo_path, screenshot_path=home.screenshot_path,
+        image_urls=[u for u in [t.get("og_image")] + t.get("images", []) if u][:10],
+        social_links={},
+    )
+    pack = TaskPack(
+        task_id=task_id, url=home.url, created_at=datetime.now(timezone.utc).isoformat(),
+        industry=industry, industry_reason=reason, max_posts=max_posts, brand=brand,
+        evidence=evidence, pages_crawled=[home.url] + [p.url for p in pages],
+    )
+    write_pack(pack, pack_dir, extras.get("customers", []))
+    log.info("[prepare] %d evidence items (%d site, %d news) from %d pages",
+             len(evidence), sum(e.kind != "article" for e in evidence),
+             sum(e.kind == "article" for e in evidence), len(pack.pages_crawled))
+    return pack, run_dir
+
+
+def write_pack(pack: TaskPack, pack_dir: Path, customers: list[str]) -> None:
+    """pack.json for code; source/*.md is the human/model-readable copy Harness² shows."""
+    src = pack_dir / "source"
+    src.mkdir(parents=True, exist_ok=True)
+    (pack_dir / "pack.json").write_text(pack.model_dump_json(indent=2), encoding="utf-8")
+    b = pack.brand
+    (src / "brand.md").write_text(
+        f"# {b.name}\n\n- url: {b.url}\n- industry playbook: {pack.industry}\n"
+        f"- tagline: {b.tagline}\n- description: {b.description}\n"
+        f"- customer/partner logos on site: {', '.join(customers) or 'none found'}\n"
+        f"- pages crawled: {len(pack.pages_crawled)}\n", encoding="utf-8")
+    (src / "evidence.md").write_text(
+        "# Evidence\n\nEvery claim in a post must be supported by one of these items. "
+        "Each line is `[id] (kind, date, url) title -- text`.\n\n"
+        + "\n\n".join(e.render() for e in pack.evidence) + "\n", encoding="utf-8")
+
+
+def load_pack(pack_dir: Path) -> TaskPack:
+    return TaskPack.model_validate(json.loads((pack_dir / "pack.json").read_text(encoding="utf-8")))
