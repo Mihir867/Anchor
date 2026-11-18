@@ -1,4 +1,6 @@
 # Python Virtual Environments
+.venv/
+ai-engine/.venv/
 ai-engine/venv/
 venv/
 ENV/
@@ -9,8 +11,16 @@ __pycache__/
 *.py[cod]
 *$py.class
 .pytest_cache/
+.coverage
+htmlcov/
+.ruff_cache/
+.mypy_cache/
 
-# Node.js & Frontend/Backend dependencies
+# Local Engine Runs & Outputs (to be persisted in DB / Cloud Storage later)
+runs/
+ai-engine/runs/
+
+# Node.js & Frontend dependencies
 node_modules/
 client/node_modules/
 server/node_modules/
@@ -23,14 +33,17 @@ client/dist/
 client/build/
 .next/
 dist/
+test-results/
+playwright-report/
 
 # Environment Variables (Secrets, API keys)
 .env
 .env.local
 .env.*.local
 *.env
+ai-engine/.env
 
-# Crawler Output Artifacts (Temporary test outputs)
+# Temporary Run & Crawler Output Artifacts
 ai-engine/output_visuals.json
 ai-engine/output_deck.json
 ai-engine/output_semantic.json
@@ -38,8 +51,23 @@ ai-engine/hero_screenshot.png
 *.png
 *.jpg
 *.jpeg
+*.webp
+*.pdf
+
+# Preserve built-in static fonts
+!ai-engine/assets/fonts/**
+
+# Database files (local dev / SQLite)
+*.db
+*.sqlite
+*.sqlite3
+
+# Logs
+*.log
 
 # OS & Editor specific files
 .DS_Store
 .vscode/
 .idea/
+.claude/
+ai-engine/.claude/

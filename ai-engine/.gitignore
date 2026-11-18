@@ -3,3 +3,9 @@ venv/
 runs/
 __pycache__/
 .pytest_cache/
+.coverage
+htmlcov/
+*.py[cod]
+.env
+.claude/
+*.log
