@@ -96,33 +96,10 @@ class CrawlResult:
 
 
 async def _launch(p):
-    args = [
-        "--no-sandbox",
-        "--disable-setuid-sandbox",
-        "--disable-dev-shm-usage",
-        "--disable-gpu",
-    ]
     try:
-        return await p.chromium.launch(headless=True, args=args)
-    except Exception as e:
-        err_msg = str(e).lower()
-        log.warning("Initial chromium launch failed: %s", e)
-        if "executable doesn't exist" in err_msg or "not found" in err_msg or "install" in err_msg:
-            import subprocess
-            import sys
-
-            log.info("Playwright chromium missing at runtime. Installing chromium now...")
-            subprocess.run([sys.executable, "-m", "playwright", "install", "chromium"], check=False)
-            try:
-                return await p.chromium.launch(headless=True, args=args)
-            except Exception as retry_err:
-                log.error("Retry after installing chromium failed: %s", retry_err)
-
-        # Fallback to system chrome channel if installed
-        try:
-            return await p.chromium.launch(headless=True, channel="chrome", args=args)
-        except Exception:
-            raise e
+        return await p.chromium.launch(headless=True)
+    except Exception:
+        return await p.chromium.launch(headless=True, channel="chrome")
 
 
 async def _goto(page, url: str) -> None:
