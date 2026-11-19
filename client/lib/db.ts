@@ -18,7 +18,7 @@ const STAGE_IDS: Record<string, string> = {
 };
 function publicStage(stage: string | null, status: string): string {
   const s = stage ?? status;
-  return STAGE_IDS[s] ?? (["queued", "done", "failed"].includes(s) ? s : "discover");
+  return STAGE_IDS[s] ?? (["queued", "done", "failed", "cancelled"].includes(s) ? s : "discover");
 }
 
 // Only these live-progress fields reach the browser; the rest describe how the engine works.
@@ -192,6 +192,15 @@ export async function dbGetRun(id: string): Promise<RunJobResponse | null> {
       posts_md_url: `/api/runs/${encodeURIComponent(run.id)}/posts`,
     },
   };
+}
+
+/** Mark an in-flight run cancelled (fallback when the engine can't be reached). */
+export async function dbCancelRun(id: string): Promise<void> {
+  await pool().query(
+    `UPDATE runs SET status = 'cancelled', stage = 'cancelled', error = NULL, updated_at = now(), finished_at = now()
+      WHERE (id = $1 OR task_id = $1) AND status IN ('queued', 'running')`,
+    [id],
+  );
 }
 
 export async function dbGetPostsMarkdown(id: string): Promise<string | null> {

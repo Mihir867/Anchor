@@ -42,7 +42,7 @@ export default function Home() {
     }
   }, []);
 
-  const { state, start, attach, reset } = useRunJob(handleDone);
+  const { state, start, attach, reset, cancel } = useRunJob(handleDone);
   const busy = state.phase === "starting" || state.phase === "active";
 
   // Restore the normal title when the user comes back to the tab.
@@ -136,6 +136,10 @@ export default function Home() {
               <RunProgress
                 state={state}
                 onRetry={onRetry}
+                onCancel={async () => {
+                  await cancel();
+                  setRefreshKey((k) => k + 1);
+                }}
                 onReset={() => {
                   reset();
                 }}

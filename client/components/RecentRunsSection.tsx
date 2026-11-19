@@ -111,7 +111,7 @@ export function RecentRunsSection({ onSelectRun, onAttach, selectedTaskId, activ
                 key={r.id}
                 type="button"
                 onClick={() => open(r)}
-                disabled={r.status === "failed"}
+                disabled={r.status === "failed" || r.status === "cancelled"}
                 className={`group text-left p-5 rounded-2xl border bg-surface transition-all cursor-pointer disabled:cursor-default flex flex-col justify-between min-h-[132px] ${
                   selected ? "border-ink shadow-lift" : "border-line hover:border-line-strong hover:shadow-card hover:-translate-y-0.5"
                 }`}
@@ -124,6 +124,8 @@ export function RecentRunsSection({ onSelectRun, onAttach, selectedTaskId, activ
                         <span className="w-1.5 h-1.5 rounded-full bg-brand animate-breathe" />
                         {stage?.short || "Creating"}
                       </span>
+                    ) : r.status === "cancelled" ? (
+                      <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-sunken text-muted border border-line shrink-0">Stopped</span>
                     ) : r.status === "failed" ? (
                       <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-sunken text-muted border border-line shrink-0">Didn&rsquo;t finish</span>
                     ) : (

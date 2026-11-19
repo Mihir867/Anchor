@@ -42,7 +42,7 @@ CREATE TABLE IF NOT EXISTS runs (
     brand           TEXT,
     industry        TEXT,
     mode            TEXT,
-    status          TEXT NOT NULL,             -- queued | running | done | failed
+    status          TEXT NOT NULL,             -- queued | running | done | failed | cancelled
     stage           TEXT,
     error           TEXT,
     note            TEXT,
@@ -178,12 +178,47 @@ def record_job(job_id: str, request: dict, status: str, stage: str | None = None
                    VALUES (%s, %s, %s, %s, %s, %s, %s, %s)
                    ON CONFLICT (id) DO UPDATE SET status = EXCLUDED.status, stage = EXCLUDED.stage,
                      error = EXCLUDED.error, updated_at = now(),
-                     finished_at = CASE WHEN EXCLUDED.status IN ('done', 'failed') THEN now()
+                     finished_at = CASE WHEN EXCLUDED.status IN ('done', 'failed', 'cancelled') THEN now()
                                         ELSE runs.finished_at END""",
                 (job_id, url, _domain(url), request.get("mode"), status, stage or status, error,
                  _jsonb(request)))
     except Exception as exc:  # storage must never break a run
         log.warning("[storage] could not record job %s (%s): %s", job_id, status, exc)
+
+
+def cancel_job(job_id: str) -> bool:
+    """Mark an in-flight job cancelled. Returns False if it was not queued/running."""
+    if not enabled():
+        return False
+    try:
+        init()
+        with _connect() as conn:
+            cur = conn.execute(
+                """UPDATE runs SET status = 'cancelled', stage = 'cancelled', error = NULL,
+                          updated_at = now(), finished_at = now()
+                    WHERE id = %s AND status IN ('queued', 'running')""", (job_id,))
+            return cur.rowcount > 0
+    except Exception as exc:
+        log.warning("[storage] could not cancel job %s: %s", job_id, exc)
+        return False
+
+
+def fail_interrupted() -> int:
+    """At startup, nothing is running yet: any queued/running row was cut off by a restart or
+    deploy. Mark those failed so the client stops showing them as in progress."""
+    if not enabled():
+        return 0
+    try:
+        init()
+        with _connect() as conn:
+            cur = conn.execute(
+                """UPDATE runs SET status = 'failed', stage = 'failed', error = 'interrupted: engine restarted',
+                          updated_at = now(), finished_at = now()
+                    WHERE status IN ('queued', 'running')""")
+            return cur.rowcount
+    except Exception as exc:
+        log.warning("[storage] could not clean up interrupted jobs: %s", exc)
+        return 0
 
 
 # One writer thread keeps progress updates ordered and off the pipeline's critical path.

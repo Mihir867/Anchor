@@ -9,11 +9,16 @@
 // retry, and the run is re-checked the moment the tab becomes visible, regains focus, or comes
 // back online. The job id lives in localStorage, so a refresh resumes where it left off.
 import { useCallback, useEffect, useRef, useState } from "react";
-import { createRun, getRun, RunJobResponse, RunResult } from "./api";
+import { HttpError, cancelRun, createRun, getRun, RunJobResponse, RunResult } from "./api";
 
 const STORAGE_KEY = "anchor.activeRun";
 const POLL_MS = 2_000;
 const MAX_BACKOFF_MS = 15_000;
+/** A run the database doesn't know (deleted) is dropped on the first 404 when resumed; a run we
+ * just started gets a few polls of grace in case its row is still being written. */
+const NEW_RUN_404_GRACE = 3;
+/** A remembered run older than this is not resumed after a refresh. */
+const MAX_RESUME_AGE_MS = 6 * 60 * 60 * 1000;
 
 export interface StartPayload {
   url: string;
@@ -57,8 +62,14 @@ const idle: RunJobState = {
 function readStored(): Stored | null {
   try {
     const raw = localStorage.getItem(STORAGE_KEY);
-    return raw ? (JSON.parse(raw) as Stored) : null;
+    const stored = raw ? (JSON.parse(raw) as Stored) : null;
+    if (stored && (!stored.id || Date.now() - (stored.startedAt || 0) > MAX_RESUME_AGE_MS)) {
+      localStorage.removeItem(STORAGE_KEY);
+      return null;
+    }
+    return stored;
   } catch {
+    localStorage.removeItem(STORAGE_KEY);
     return null;
   }
 }
@@ -74,6 +85,8 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
   const inFlight = useRef(false);
   const activeId = useRef<string | null>(null);
   const failures = useRef(0);
+  const notFound = useRef(0);
+  const notFoundLimit = useRef(1);
 
   const clearTimer = () => {
     if (timer.current) clearTimeout(timer.current);
@@ -90,6 +103,14 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
       const job = await getRun(id);
       if (activeId.current !== id) return; // superseded by another run
       failures.current = 0;
+      notFound.current = 0;
+      if (job.status === "cancelled") {
+        // Stopped (here or in another tab): nothing to follow any more.
+        activeId.current = null;
+        localStorage.removeItem(STORAGE_KEY);
+        setState(idle);
+        return;
+      }
       if (job.status === "done" || job.status === "failed") {
         activeId.current = null;
         localStorage.removeItem(STORAGE_KEY);
@@ -112,8 +133,17 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
         phase: "active",
         startedAt: job.created_at ? Date.parse(job.created_at) : s.startedAt,
       }));
-    } catch {
-      // Not in the database yet, a timeout, or the dev server restarting: retry with backoff.
+    } catch (err) {
+      if (activeId.current !== id) return;
+      // The run no longer exists (deleted, or never recorded): stop following it instead of
+      // showing progress for work nobody is doing.
+      if (err instanceof HttpError && err.status === 404 && ++notFound.current >= notFoundLimit.current) {
+        activeId.current = null;
+        localStorage.removeItem(STORAGE_KEY);
+        setState(idle);
+        return;
+      }
+      // A timeout, a blip, or the server restarting: retry with backoff.
       failures.current += 1;
       next = Math.min(
         POLL_MS * 2 ** Math.min(failures.current, 3),
@@ -127,9 +157,11 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
   }, []);
 
   const track = useCallback(
-    (stored: Stored) => {
+    (stored: Stored, fresh = false) => {
       activeId.current = stored.id;
       failures.current = 0;
+      notFound.current = 0;
+      notFoundLimit.current = fresh ? NEW_RUN_404_GRACE : 1;
       localStorage.setItem(STORAGE_KEY, JSON.stringify(stored));
       setState({
         ...idle,
@@ -155,12 +187,15 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
       });
       try {
         const id = await createRun(payload);
-        track({
-          id,
-          url: payload.url,
-          mode: payload.mode,
-          startedAt: Date.now(),
-        });
+        track(
+          {
+            id,
+            url: payload.url,
+            mode: payload.mode,
+            startedAt: Date.now(),
+          },
+          true,
+        );
       } catch (err) {
         setState((s) => ({
           ...s,
@@ -181,6 +216,18 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
       track({ id, url, mode, startedAt: Date.now() }),
     [track],
   );
+
+  /** Stop the run in flight. The UI moves on at once; the server stops the work. */
+  const cancel = useCallback(async () => {
+    const id = activeId.current;
+    if (!id) return;
+    await cancelRun(id); // throws if the stop could not be recorded; the run keeps showing
+    if (activeId.current !== id) return;
+    activeId.current = null;
+    clearTimer();
+    localStorage.removeItem(STORAGE_KEY);
+    setState(idle);
+  }, []);
 
   const reset = useCallback(() => {
     activeId.current = null;
@@ -207,5 +254,5 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
     };
   }, [poll, track]);
 
-  return { state, start, attach, reset };
+  return { state, start, attach, reset, cancel };
 }

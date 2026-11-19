@@ -8,6 +8,8 @@ interface RunProgressProps {
   state: RunJobState;
   onReset: () => void;
   onRetry: () => void;
+  /** Stop the run in flight. Rejects if the stop could not be recorded. */
+  onCancel: () => Promise<void>;
 }
 
 function hostOf(url: string | null) {
@@ -21,7 +23,7 @@ function hostOf(url: string | null) {
 
 const RING = 2 * Math.PI * 52;
 
-export function RunProgress({ state, onReset, onRetry }: RunProgressProps) {
+export function RunProgress({ state, onReset, onRetry, onCancel }: RunProgressProps) {
   const { phase, job, failures } = state;
   const progress = job?.progress;
   const stage = phase === "starting" ? "queued" : job?.stage || job?.status || "queued";
@@ -64,6 +66,32 @@ export function RunProgress({ state, onReset, onRetry }: RunProgressProps) {
     return () => clearInterval(t);
   }, []);
 
+  // Stop: ask once, inline, then stop.
+  const [confirming, setConfirming] = useState(false);
+  const [stopping, setStopping] = useState(false);
+  const [stopError, setStopError] = useState<string | null>(null);
+  useEffect(() => {
+    setConfirming(false);
+    setStopping(false);
+    setStopError(null);
+  }, [state.jobId]);
+  useEffect(() => {
+    if (!confirming) return;
+    const t = setTimeout(() => setConfirming(false), 6000);
+    return () => clearTimeout(t);
+  }, [confirming]);
+  const stop = async () => {
+    setStopping(true);
+    setStopError(null);
+    try {
+      await onCancel();
+    } catch (err) {
+      setStopError(err instanceof Error ? err.message : "Couldn't stop right now. Please try again.");
+      setStopping(false);
+      setConfirming(false);
+    }
+  };
+
   useEffect(() => {
     if (phase !== "active" && phase !== "starting") return;
     document.title = `${pct}% · ${name || "Your posts"} — Anchor`;
@@ -100,6 +128,47 @@ export function RunProgress({ state, onReset, onRetry }: RunProgressProps) {
         aria-hidden
         className="pointer-events-none absolute -top-40 -right-32 w-[520px] h-[420px] bg-[radial-gradient(ellipse_at_center,rgba(251,191,36,0.16),transparent_65%)]"
       />
+
+      {state.jobId && (
+        <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
+          {confirming ? (
+            <div className="flex items-center gap-1.5 p-1 pl-3 rounded-full bg-surface border border-line shadow-card animate-fade-up">
+              <span className="text-[12px] text-ink-soft">Stop creating these posts?</span>
+              <button
+                type="button"
+                onClick={() => setConfirming(false)}
+                disabled={stopping}
+                className="h-7 px-3 rounded-full text-[12px] font-medium text-muted hover:text-ink cursor-pointer disabled:opacity-50"
+              >
+                Keep going
+              </button>
+              <button
+                type="button"
+                onClick={stop}
+                disabled={stopping}
+                className="h-7 px-3 rounded-full text-[12px] font-semibold bg-bad text-white hover:bg-red-700 cursor-pointer disabled:opacity-70 inline-flex items-center gap-1.5"
+              >
+                {stopping && (
+                  <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
+                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.35" strokeWidth="3" />
+                    <path d="M21 12a9 9 0 00-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
+                  </svg>
+                )}
+                {stopping ? "Stopping" : "Stop"}
+              </button>
+            </div>
+          ) : (
+            <button
+              type="button"
+              onClick={() => setConfirming(true)}
+              className="h-8 pl-2.5 pr-3.5 rounded-full border border-line bg-surface/90 backdrop-blur text-[12px] font-medium text-muted hover:text-bad hover:border-red-200 transition-colors cursor-pointer inline-flex items-center gap-1.5"
+            >
+              <span className="w-2.5 h-2.5 rounded-[3px] bg-current" aria-hidden />
+              Stop
+            </button>
+          )}
+        </div>
+      )}
 
       <div className="relative grid md:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
         {/* Left: ring + current step */}
@@ -158,6 +227,7 @@ export function RunProgress({ state, onReset, onRetry }: RunProgressProps) {
           </div>
 
           {failures > 2 && <div className="mt-3 text-[12px] text-brand-deep">Reconnecting…</div>}
+          {stopError && <div className="mt-3 text-[12px] text-bad">{stopError}</div>}
         </div>
 
         {/* Right: posts taking shape */}

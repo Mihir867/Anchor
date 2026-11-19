@@ -4,6 +4,7 @@ Endpoints:
     POST /runs                 {"url": "...", "mode": "refine"|"fast", "k": 1, "posts": 3} -> {"job_id"}
     GET  /runs                 -> List all runs (in-memory + historical on disk)
     GET  /runs/{job_id}        -> Status, result summary, and full deck
+    POST /runs/{job_id}/cancel -> Stop a queued or running job
     GET  /runs/{job_id}/posts.md -> Rendered markdown of verified posts
     GET  /runs/{job_id}/files/{filename} -> Direct download of posters / PDFs
     GET  /health               -> Health check (+ which storage backends are configured)
@@ -55,6 +56,13 @@ app.mount("/static/runs", StaticFiles(directory=str(runs_dir)), name="runs")
 
 _pool = ThreadPoolExecutor(max_workers=int(os.environ.get("ANCHOR_WORKERS", "2")))
 _jobs: dict[str, dict] = {}
+_futures: dict = {}
+
+# Single production instance: whatever the DB still shows as in flight was cut off by the last
+# restart or deploy. Only on Render (or when opted in), so a local dev engine pointed at the same
+# database never fails production's live runs.
+if (os.environ.get("RENDER") or os.environ.get("ANCHOR_FAIL_INTERRUPTED") == "1") and (n := storage.fail_interrupted()):
+    log.info("marked %d interrupted job(s) as failed", n)
 
 
 class RunRequest(BaseModel):
@@ -85,6 +93,9 @@ def _format_result(res: dict, task_id: str) -> dict:
 
 
 def _work(job_id: str, req: RunRequest) -> None:
+    _futures.pop(job_id, None)
+    if _jobs[job_id].get("cancel"):
+        return
     _jobs[job_id]["status"] = "running"
     _jobs[job_id]["stage"] = "crawling"
     storage.record_job(job_id, req.model_dump(), "running", "crawling")
@@ -93,8 +104,11 @@ def _work(job_id: str, req: RunRequest) -> None:
         _jobs[job_id].update(stage=stage, progress=info)
         storage.record_progress(job_id, stage, info)
 
+    def stopped() -> bool:
+        return bool(_jobs[job_id].get("cancel"))
+
     try:
-        with progress.reporting(on_progress):
+        with progress.reporting(on_progress, stopped):
             raw_result = run(
                 req.url,
                 mode=req.mode,
@@ -105,6 +119,8 @@ def _work(job_id: str, req: RunRequest) -> None:
             )
         task_id = raw_result.get("task_id", job_id)
         formatted = _format_result(raw_result, task_id)
+        if stopped():
+            raise progress.Cancelled()
         if storage.enabled():
             on_progress("saving", {**_jobs[job_id].get("progress", {}),
                                    "verified": raw_result.get("verified_posts")})
@@ -116,6 +132,11 @@ def _work(job_id: str, req: RunRequest) -> None:
                 formatted["storage_error"] = f"{type(exc).__name__}: {exc}"
                 storage.record_job(job_id, req.model_dump(), "done", "done", f"storage: {exc}")
         _jobs[job_id].update(status="done", stage="done", result=formatted, task_id=task_id)
+    except progress.Cancelled:
+        log.info("job %s cancelled", job_id)
+        _jobs[job_id].update(status="cancelled", stage="cancelled")
+        storage.flush_progress()
+        storage.cancel_job(job_id)
     except Exception as exc:
         logging.exception("job %s failed", job_id)
         error = f"{type(exc).__name__}: {exc}"
@@ -208,8 +229,23 @@ def create_run(req: RunRequest) -> dict:
         "job_id": job_id,
     }
     storage.record_job(job_id, req.model_dump(), "queued")
-    _pool.submit(_work, job_id, req)
+    _futures[job_id] = _pool.submit(_work, job_id, req)
     return {"job_id": job_id, "status": "queued"}
+
+
+@app.post("/runs/{job_id}/cancel")
+def cancel_run(job_id: str) -> dict:
+    """Stop a job. A queued job never starts; a running one exits at its next stage boundary.
+    The row is marked cancelled right away so the client can move on immediately."""
+    job = _jobs.get(job_id)
+    if job and job.get("status") in ("queued", "running"):
+        job["cancel"] = True
+        fut = _futures.pop(job_id, None)
+        if fut is not None:
+            fut.cancel()
+        job.update(status="cancelled", stage="cancelled")
+    storage.cancel_job(job_id)  # also covers rows orphaned by a restart
+    return {"job_id": job_id, "status": "cancelled"}
 
 
 @app.get("/runs/{job_id}")

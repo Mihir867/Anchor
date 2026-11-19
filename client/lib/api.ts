@@ -7,22 +7,28 @@ export function assetUrl(u: string): string {
 
 // The browser only ever talks to this app's /api routes: runs are read from Postgres, and new
 // runs are started through /api/generate, which proxies to the engine server-side.
+export class HttpError extends Error {
+  constructor(public status: number) {
+    super(`Request failed (${status})`);
+  }
+}
+
 async function fromDb<T>(path: string, timeoutMs = 12_000): Promise<T> {
   // A hung request must never stall polling: give up and let the caller retry.
   const res = await fetch(path, {
     cache: "no-store",
     signal: AbortSignal.timeout(timeoutMs),
   });
-  if (!res.ok) {
-    throw new Error(`Request failed (${res.status})`);
-  }
+  if (!res.ok) throw new HttpError(res.status);
   return (await res.json()) as T;
 }
+
+export type RunStatus = "queued" | "running" | "done" | "failed" | "cancelled";
 
 export interface RunItem {
   id: string;
   task_id: string;
-  status: "queued" | "running" | "done" | "failed";
+  status: RunStatus;
   brand?: string;
   url?: string;
   industry?: string;
@@ -99,7 +105,7 @@ export interface RunProgress {
 }
 
 export interface RunJobResponse {
-  status: "queued" | "running" | "done" | "failed";
+  status: RunStatus;
   stage?: string;
   job_id: string;
   result?: RunResult;
@@ -141,4 +147,10 @@ export async function createRun(payload: {
 
 export async function getRun(jobId: string): Promise<RunJobResponse> {
   return fromDb<RunJobResponse>(`/api/runs/${encodeURIComponent(jobId)}`);
+}
+
+/** Stop a run that is queued or in progress. */
+export async function cancelRun(jobId: string): Promise<void> {
+  const res = await fetch(`/api/runs/${encodeURIComponent(jobId)}/cancel`, { method: "POST" });
+  if (!res.ok) throw new Error("Couldn't stop right now. Please try again.");
 }
