@@ -254,12 +254,28 @@ async def _launch(p):
 
 
 async def _goto(page, url: str) -> None:
-    await page.goto(url, wait_until="domcontentloaded", timeout=35000)
+    try:  # asyncio deadline as a backstop: Playwright's own timeout can overrun on a wedged renderer
+        await asyncio.wait_for(page.goto(url, wait_until="domcontentloaded", timeout=35000), 45)
+    except asyncio.TimeoutError:
+        raise RuntimeError(f"{url}: the page did not load within 45s") from None
     try:
         await page.wait_for_load_state("networkidle", timeout=6000)
     except Exception:
         pass
     await page.wait_for_timeout(800)
+
+
+async def _bounded(coro, seconds: float, label: str, default=None):
+    """Await `coro` with a hard wall-clock deadline. Playwright's own timeouts live in the Node
+    driver and can overrun (or never fire) when the renderer is wedged on a heavy page; an
+    asyncio deadline always returns control to us. Optional steps fall back to `default`."""
+    try:
+        return await asyncio.wait_for(coro, seconds)
+    except asyncio.TimeoutError:
+        log.warning("[crawl] %s took longer than %ss; skipped", label, seconds)
+    except Exception as err:
+        log.warning("[crawl] %s failed (%s); skipped", label, (str(err).splitlines() or [type(err).__name__])[0][:200])
+    return default
 
 
 async def crawl_home(url: str, assets_dir: Path) -> CrawlResult:
@@ -268,29 +284,45 @@ async def crawl_home(url: str, assets_dir: Path) -> CrawlResult:
     assets_dir.mkdir(parents=True, exist_ok=True)
     async with async_playwright() as p:
         browser = await _launch(p)
-        # 1x, not 2x: a 2x render of a heavy home page peaks around 750 MB and gets the process
-        # OOM-killed on a 512 MB instance (1x: ~400 MB). Only the logo is rendered at 2x (_logo).
-        ctx = await browser.new_context(viewport={"width": 1440, "height": 900}, user_agent=UA,
-                                        device_scale_factor=1)
-        # Video, trackers, chat widgets and embeds are never used (screenshot and tokens come
-        # from the first frame anyway) and are the bulk of a heavy page's memory.
-        await ctx.route("**/*", _router(url, _ALWAYS_SKIP))
-        page = await ctx.new_page()
-        await _goto(page, url)
-        final_url = page.url
-        tokens = await page.evaluate(TOKENS_JS)
-        shot = assets_dir / "screenshot.png"
-        body_text = await page.evaluate("() => (document.body && document.body.innerText) || ''")
-        reason = blocked_reason(tokens.get("title", ""), body_text)
-        if reason:
-            await browser.close()
-            log.warning("[crawl] %s answered with a bot-protection page (%r); final url %s",
-                        url, reason, final_url)
-            raise SiteBlocked(f"{url} is behind bot protection ({reason!r}); the crawler was not let through")
-        shot_ok = await _screenshot(page, shot)
-        logo = await _logo(page, assets_dir / "logo.png")
-        html = await _slim_html(page)
-        await browser.close()
+        try:
+            # 1x, not 2x: a 2x render of a heavy home page peaks around 750 MB and gets the process
+            # OOM-killed on a 512 MB instance (1x: ~400 MB). Only the logo is rendered at 2x (_logo).
+            ctx = await browser.new_context(viewport={"width": 1440, "height": 900}, user_agent=UA,
+                                            device_scale_factor=1)
+            # Video, trackers, chat widgets and embeds are never used (screenshot and tokens come
+            # from the first frame anyway) and are the bulk of a heavy page's memory.
+            await ctx.route("**/*", _router(url, _ALWAYS_SKIP))
+            page = await ctx.new_page()
+            await _goto(page, url)
+            final_url = page.url
+            # Essential reads: bounded so a wedged renderer fails the run with a clear error
+            # instead of hanging the worker thread forever.
+            try:
+                tokens = await asyncio.wait_for(page.evaluate(TOKENS_JS), 30)
+                body_text = await asyncio.wait_for(
+                    page.evaluate("() => (document.body && document.body.innerText) || ''"), 15)
+            except asyncio.TimeoutError:
+                raise RuntimeError(f"{url}: the page stopped responding while being read") from None
+            reason = blocked_reason(tokens.get("title", ""), body_text)
+            if reason:
+                log.warning("[crawl] %s answered with a bot-protection page (%r); final url %s",
+                            url, reason, final_url)
+                raise SiteBlocked(f"{url} is behind bot protection ({reason!r}); the crawler was not let through")
+            # Logo and screenshot before HTML: _slim_html strips SVGs, CSS and attributes from
+            # the live DOM.
+            logo = await _bounded(_logo(page, assets_dir / "logo.png"), 20, "logo capture")
+            # The screenshot is only a fallback image (render.brand_images uses og:image and the
+            # site's large images first). Skip it when those exist; it is the slowest, most
+            # hang-prone step on heavy pages.
+            shot = assets_dir / "screenshot.png"
+            shot_ok = False
+            if tokens.get("og_image") or tokens.get("images"):
+                log.info("[crawl] site has its own imagery; skipping home screenshot")
+            else:
+                shot_ok = bool(await _bounded(_screenshot(page, shot), 20, "home screenshot", False))
+            html = await asyncio.wait_for(_slim_html(page), 45)
+        finally:
+            await _bounded(browser.close(), 10, "browser close")
     log.info("[crawl] home %s: title=%r, %d chars of text", final_url, tokens.get("title", "")[:80], len(body_text))
     return CrawlResult(
         url=final_url, home=Page(final_url, html, tokens.get("title", "")), tokens=tokens,
@@ -299,27 +331,14 @@ async def crawl_home(url: str, assets_dir: Path) -> CrawlResult:
 
 
 async def _screenshot(page, out: Path) -> bool:
-    """Best-effort viewport screenshot. Playwright's screenshot waits for web fonts and a stable
-    frame; heavy pages (endless animations, slow font CDNs) on small instances can stall that
-    wait past its 30 s default and used to fail the whole run. The screenshot is optional
-    downstream, so: one bounded normal attempt, then a raw CDP capture that skips those waits,
-    then give up and continue without one."""
-    try:
-        await page.screenshot(path=str(out), timeout=15000, animations="disabled", caret="hide")
-        return True
-    except Exception as err:
-        log.warning("[crawl] screenshot failed (%s); retrying via CDP", str(err).splitlines()[0][:200])
-    try:
-        import base64
-        cdp = await page.context.new_cdp_session(page)
-        res = await asyncio.wait_for(
-            cdp.send("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False}), 15)
-        out.write_bytes(base64.b64decode(res["data"]))
-        return True
-    except Exception as err:
-        log.warning("[crawl] CDP screenshot failed too (%s); continuing without a screenshot",
-                    str(err).splitlines()[0][:200] if str(err) else type(err).__name__)
-        return False
+    """Viewport capture via raw CDP. Playwright's page.screenshot waits for web fonts and a stable
+    frame, which can stall indefinitely on animated pages; CDP just grabs the current frame.
+    The caller bounds this with a hard deadline."""
+    import base64
+    cdp = await page.context.new_cdp_session(page)
+    res = await cdp.send("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False})
+    out.write_bytes(base64.b64decode(res["data"]))
+    return True
 
 
 async def _logo(page, out: Path) -> str | None:
@@ -425,32 +444,38 @@ async def crawl_pages(urls: list[str], limit: int, concurrency: int | None = Non
         ctx = await browser.new_context(viewport={"width": 1366, "height": 900}, user_agent=UA)
         await ctx.route("**/*", _router(urls[0] if urls else "", _SUBPAGE_SKIP))
 
+        async def read(pg, u: str) -> Page | None:
+            resp = await pg.goto(u, wait_until="domcontentloaded", timeout=25000)
+            if not resp or resp.status >= 400:
+                return None
+            await pg.wait_for_timeout(900)
+            title = await pg.title()
+            text = await pg.evaluate("() => (document.body && document.body.innerText) || ''")
+            if blocked_reason(title, text):
+                log.info("skip %s: bot-protection page", u)
+                return None
+            return Page(pg.url, await _slim_html(pg), title)
+
         async def one(u: str) -> Page | None:
             async with sem:
                 if len(pages) >= limit:  # enough pages already: skip the spare candidates
                     return None
                 pg = await ctx.new_page()
                 try:
-                    resp = await pg.goto(u, wait_until="domcontentloaded", timeout=25000)
-                    if not resp or resp.status >= 400:
-                        return None
-                    await pg.wait_for_timeout(900)
-                    title = await pg.title()
-                    text = await pg.evaluate("() => (document.body && document.body.innerText) || ''")
-                    if blocked_reason(title, text):
-                        log.info("skip %s: bot-protection page", u)
-                        return None
-                    got = Page(pg.url, await _slim_html(pg), title)
-                    if len(pages) < limit and all(got.url != x.url for x in pages):
+                    # Hard per-page deadline: one wedged subpage must not hang the whole run.
+                    got = await asyncio.wait_for(read(pg, u), 50)
+                    if got and len(pages) < limit and all(got.url != x.url for x in pages):
                         pages.append(got)
                     return got
                 except Exception as exc:
-                    log.debug("skip %s: %s", u, exc)
+                    log.info("skip %s: %s", u, (str(exc).splitlines() or [type(exc).__name__])[0][:200])
                     return None
                 finally:
-                    await pg.close()
+                    await _bounded(pg.close(), 5, f"close {u}")
 
-        await asyncio.gather(*(one(u) for u in urls[: limit + 4]))
-        await browser.close()
+        try:
+            await asyncio.gather(*(one(u) for u in urls[: limit + 4]))
+        finally:
+            await _bounded(browser.close(), 10, "browser close")
     log.info("Rendered %d subpages", len(pages))
     return pages
