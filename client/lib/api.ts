@@ -1,4 +1,5 @@
-export const API_BASE = process.env.NEXT_API_URL || "http://localhost:8000";
+export const API_BASE =
+  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
 /** Absolute URL for an asset: Cloudinary URLs pass through, same-origin /api/ routes stay
  * relative, and engine paths (/static/runs/..., /runs/...) are served by the engine. */

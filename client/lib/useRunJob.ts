@@ -168,7 +168,7 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
           error:
             err instanceof TypeError
               ? "Could not reach the Anchor engine. Is it running on " +
-                (process.env.NEXT_API_URL || "http://localhost:8000") +
+                (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000") +
                 "?"
               : err instanceof Error
                 ? err.message
