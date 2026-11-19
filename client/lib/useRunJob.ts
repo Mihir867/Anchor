@@ -98,9 +98,11 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
           job,
           failures: 0,
           phase: job.status === "done" ? "done" : "failed",
-          error: job.status === "failed" ? job.error || "The run failed." : null,
+          error:
+            job.status === "failed" ? job.error || "The run failed." : null,
         }));
-        if (job.status === "done" && job.result) onDoneRef.current?.(job.result);
+        if (job.status === "done" && job.result)
+          onDoneRef.current?.(job.result);
         return;
       }
       setState((s) => ({
@@ -113,7 +115,10 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
     } catch {
       // Not in the database yet, a timeout, or the dev server restarting: retry with backoff.
       failures.current += 1;
-      next = Math.min(POLL_MS * 2 ** Math.min(failures.current, 3), MAX_BACKOFF_MS);
+      next = Math.min(
+        POLL_MS * 2 ** Math.min(failures.current, 3),
+        MAX_BACKOFF_MS,
+      );
       setState((s) => ({ ...s, failures: failures.current }));
     } finally {
       inFlight.current = false;
@@ -141,17 +146,30 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
 
   const start = useCallback(
     async (payload: StartPayload) => {
-      setState({ ...idle, phase: "starting", url: payload.url, mode: payload.mode, startedAt: Date.now() });
+      setState({
+        ...idle,
+        phase: "starting",
+        url: payload.url,
+        mode: payload.mode,
+        startedAt: Date.now(),
+      });
       try {
         const id = await createRun(payload);
-        track({ id, url: payload.url, mode: payload.mode, startedAt: Date.now() });
+        track({
+          id,
+          url: payload.url,
+          mode: payload.mode,
+          startedAt: Date.now(),
+        });
       } catch (err) {
         setState((s) => ({
           ...s,
           phase: "failed",
           error:
             err instanceof TypeError
-              ? "Could not reach the Anchor engine. Is it running on " + (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000") + "?"
+              ? "Could not reach the Anchor engine. Is it running on " +
+                (process.env.NEXT_API_URL || "http://localhost:8000") +
+                "?"
               : err instanceof Error
                 ? err.message
                 : String(err),
@@ -163,7 +181,8 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
 
   /** Follow a run that is already in flight (e.g. clicked in the archive). */
   const attach = useCallback(
-    (id: string, url: string, mode: "fast" | "refine" = "fast") => track({ id, url, mode, startedAt: Date.now() }),
+    (id: string, url: string, mode: "fast" | "refine" = "fast") =>
+      track({ id, url, mode, startedAt: Date.now() }),
     [track],
   );
 

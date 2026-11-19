@@ -1,5 +1,4 @@
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
+export const API_BASE = process.env.NEXT_API_URL || "http://localhost:8000";
 
 /** Absolute URL for an asset: Cloudinary URLs pass through, same-origin /api/ routes stay
  * relative, and engine paths (/static/runs/..., /runs/...) are served by the engine. */
@@ -12,7 +11,10 @@ export function assetUrl(u: string): string {
 // start new runs (POST /runs), and it records every job in the database as soon as it is queued.
 async function fromDb<T>(path: string, timeoutMs = 12_000): Promise<T> {
   // A hung request must never stall polling: give up and let the caller retry.
-  const res = await fetch(path, { cache: "no-store", signal: AbortSignal.timeout(timeoutMs) });
+  const res = await fetch(path, {
+    cache: "no-store",
+    signal: AbortSignal.timeout(timeoutMs),
+  });
   if (!res.ok) {
     const body = await res.text().catch(() => "");
     throw new Error(`${path} failed (${res.status}): ${body}`);
@@ -140,7 +142,10 @@ export interface RunJobResponse {
 
 export async function checkHealth(): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE}/health`, { cache: "no-store", signal: AbortSignal.timeout(5_000) });
+    const res = await fetch(`${API_BASE}/health`, {
+      cache: "no-store",
+      signal: AbortSignal.timeout(5_000),
+    });
     if (!res.ok) return false;
     const data = await res.json();
     return data.status === "ok";
