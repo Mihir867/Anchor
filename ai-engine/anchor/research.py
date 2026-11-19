@@ -17,6 +17,8 @@ from email.utils import parsedate_to_datetime
 import httpx
 from bs4 import BeautifulSoup
 
+from . import market
+from .config import Settings
 from .crawl import UA
 from .extract import clean, informativeness, prose
 from .verify import dominant_script, norm
@@ -88,13 +90,15 @@ def _article(hit: dict, brand: str, domain: str, script: str = "LATIN") -> list[
 
 
 def news_evidence(brand: str, domain: str, templates: list[str], max_articles: int,
-                  script: str = "LATIN") -> list[dict]:
+                  script: str = "LATIN", cfg: Settings | None = None) -> list[dict]:
     year = datetime.now().year
     queries = [t.replace("{brand_name}", brand).replace("{current_year}", str(year)) for t in templates[:3]]
     queries = queries or [f'"{brand}" (launch OR partnership OR award OR announces) {year}']
     hits, seen = [], set()
+    use_dfs = cfg is not None and cfg.dataforseo_news and market.enabled(cfg)
     for q in queries:
-        for h in _bing(q):
+        # Google News via DataForSEO first (when configured), then Bing's RSS feed.
+        for h in (market.news_hits(q, cfg) if use_dfs else []) + _bing(q):
             if (h["url"].startswith("http") and h["url"] not in seen and domain not in h["url"]
                     and dominant_script(h["title"], script) == script):
                 seen.add(h["url"])

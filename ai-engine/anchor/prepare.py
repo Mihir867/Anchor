@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from . import crawl, extract, harness, progress, research
+from . import crawl, extract, harness, market, progress, research
 from .config import Settings
 from .llm import LLM, LLMError
 from .models import BrandKit, Evidence, SkillChoice, TaskPack
@@ -108,7 +108,18 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
     domain = urlparse(home.url).netloc.removeprefix("www.")
     progress.report("researching", pages=1 + len(pages), site_evidence=len(site_items))
     script = dominant_script(" ".join(d["text"] for d in site_items) or home_text)
-    news_items = research.news_evidence(name, domain, skill.list_meta("news_queries"), cfg.max_articles, script)
+    news_items = research.news_evidence(name, domain, skill.list_meta("news_queries"), cfg.max_articles,
+                                        script, cfg)
+    intel = None
+    if market.enabled(cfg):
+        progress.report("researching", step="competitors")
+        try:
+            intel = market.market_intel(domain, name, cfg)
+        except Exception as exc:  # market context is an enhancement; never fail a run over it
+            log.warning("[prepare] DataForSEO market context failed: %s", exc)
+        if intel:
+            progress.report("researching", competitors=[c.domain for c in intel.competitors],
+                            search_keywords=len(intel.brand_keywords) + len(intel.gap_keywords))
 
     ranked = sorted(site_items + news_items, key=lambda d: d.pop("_rank", 0), reverse=True)[:70]
     if len(ranked) < MIN_EVIDENCE:
@@ -137,7 +148,7 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
     pack = TaskPack(
         task_id=task_id, url=home.url, created_at=datetime.now(timezone.utc).isoformat(),
         industry=industry, industry_reason=reason, max_posts=max_posts, brand=brand, script=script,
-        evidence=evidence, pages_crawled=[home.url] + [p.url for p in pages],
+        evidence=evidence, pages_crawled=[home.url] + [p.url for p in pages], market=intel,
     )
     write_pack(pack, pack_dir, extras.get("customers", []))
     progress.report("mining", evidence=len(evidence), news=sum(e.kind == "article" for e in evidence))
@@ -182,6 +193,9 @@ def write_pack(pack: TaskPack, pack_dir: Path, customers: list[str]) -> None:
         "# Evidence\n\nEvery claim in a post must be supported by one of these items. "
         "Each line is `[id] (kind, date, url) title -- text`.\n\n"
         + "\n\n".join(e.render() for e in pack.evidence) + "\n", encoding="utf-8")
+    if pack.market:
+        # Harness² proposers and the selector read source/, so they see the same market context.
+        (src / "market.md").write_text(market.render(pack.market, b.name), encoding="utf-8")
 
 
 def load_pack(pack_dir: Path) -> TaskPack:

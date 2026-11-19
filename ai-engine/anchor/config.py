@@ -69,6 +69,17 @@ class Settings:
     max_extra_posts: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_EXTRA_POSTS", "2")))
     min_posts: int = field(default_factory=lambda: int(_env("ANCHOR_MIN_POSTS", "2")))
     detail_slides: int = field(default_factory=lambda: int(_env("ANCHOR_DETAIL_SLIDES", "2")))
+    # DataForSEO (optional): competitors, search demand and content gaps (market.py), plus Google
+    # News results for press research. Unset login/password = the step is skipped.
+    dataforseo_login: str = field(default_factory=lambda: _env("DATAFORSEO_LOGIN"))
+    dataforseo_password: str = field(default_factory=lambda: _env("DATAFORSEO_PASSWORD"))
+    dataforseo_location_code: int = field(default_factory=lambda: int(_env("DATAFORSEO_LOCATION_CODE", "2840")))  # US
+    dataforseo_language_code: str = field(default_factory=lambda: _env("DATAFORSEO_LANGUAGE_CODE", "en"))
+    dataforseo_max_competitors: int = field(default_factory=lambda: int(_env("DATAFORSEO_MAX_COMPETITORS", "6")))
+    dataforseo_max_keywords: int = field(default_factory=lambda: int(_env("DATAFORSEO_MAX_KEYWORDS", "15")))
+    dataforseo_news: bool = field(default_factory=lambda: _env("DATAFORSEO_NEWS", "true").lower() == "true")
+    dataforseo_cache_days: float = field(default_factory=lambda: float(_env("DATAFORSEO_CACHE_DAYS", "7")))
+    dataforseo_timeout: float = field(default_factory=lambda: float(_env("DATAFORSEO_TIMEOUT", "60")))
 
     @property
     def library_dir(self) -> Path:

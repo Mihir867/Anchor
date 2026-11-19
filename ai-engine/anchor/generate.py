@@ -15,7 +15,7 @@ from datetime import date
 from pathlib import Path
 
 from . import harness as harness_mod
-from . import progress
+from . import market, progress
 from .config import Settings
 from .llm import LLM, LLMError
 from .models import (Card, CriticReport, Evidence, MinedFact, MinedFacts, PostDraft,
@@ -59,7 +59,7 @@ Rules for every fact:
 - `headline`: factual, no number or name that is not in the cited items.
 - Prefer specific, recent, third-party-confirmed facts over generic marketing claims.
 - Never combine facts from different items into a claim neither item makes.
-
+{market}
 EVIDENCE ({count} items, most specific first):
 {evidence}
 """
@@ -112,6 +112,7 @@ Write, following the voice above and the loaded skill's LinkedIn and Instagram g
   `title` (<= 60 chars) and 2-3 `bullets` (<= 120 chars), every bullet a specific fact from the
   material. Together with the cover they read as one swipeable story.
 
+{market}
 Every number, name, date, award or superlative you write must appear in the material above.
 If the material does not say it, do not say it -- write around the gap instead. In particular:
 - Do NOT state benefits, outcomes, scope ("all", "every"), audience impact or reasons the material
@@ -153,6 +154,35 @@ _LANGUAGE = {"LATIN": "English (or, if the brand's own site is in another Latin-
              "CJK": "the language of the brand's own website (Japanese or Chinese)", "HANGUL": "Korean",
              "CYRILLIC": "the brand's own Cyrillic-script language", "ARABIC": "Arabic",
              "DEVANAGARI": "Hindi", "THAI": "Thai", "HEBREW": "Hebrew", "GREEK": "Greek"}
+
+
+def market_block(pack: TaskPack, stage: str) -> str:
+    """Competitor and search-demand context (DataForSEO) for one stage; "" when there is none.
+    It is framed as context, never as material: nothing in it may be stated or cited."""
+    m = pack.market
+    if not m or not (m.competitors or m.brand_keywords or m.gap_keywords):
+        return ""
+    b = pack.brand.name
+    rivals = ", ".join(c.domain for c in m.competitors[:6]) or "unknown"
+    demand = "; ".join(f"{k.keyword} ({k.search_volume:,}/mo)" for k in m.brand_keywords[:10])
+    gaps = "; ".join(f"{k.keyword} ({k.search_volume:,}/mo, {k.competitor})" for k in m.gap_keywords[:8])
+    lines = [f"\nMARKET CONTEXT (from search data; NOT evidence -- never cite, quote or state it):",
+             f"- Competitors for the same audience: {rivals}."]
+    if demand:
+        lines.append(f"- What this audience searches for: {demand}.")
+    if gaps:
+        lines.append(f"- Topics competitors win in search and {b} does not yet: {gaps}.")
+    if stage == "mine":
+        lines.append(f"Use it to CHOOSE: prefer facts that show what sets {b} apart from these competitors "
+                     "and facts that answer what this audience searches for, or fill a gap topic. A fact "
+                     "still needs its own evidence; the context never makes an unsupported fact eligible.")
+    else:
+        lines.append(f"Use it to ANGLE and WORD the posts: frame the fact around what distinguishes {b} and "
+                     "the problem the audience searches about; reuse the audience's own search terms in "
+                     "the hook, slides and hashtags where the evidence supports them. Never name, link, "
+                     "or compare to a competitor (a comparison is an unsupported claim), and never state "
+                     "search volumes or rankings.")
+    return "\n".join(lines) + "\n"
 
 
 def choose_skills(h: harness_mod.Harness, pack: TaskPack, llm: LLM, traj: Trajectory) -> list[str]:
@@ -208,7 +238,8 @@ def mine(pack: TaskPack, system: str, llm: LLM, cfg: Settings, traj: Trajectory,
         block = all_batches[b_idx]
         b_idx += 1
         count = block.count("\n\n[E") + 1
-        task = MINE_TASK.format(brand=pack.brand.name, n=pack.max_posts, count=count, evidence=block)
+        task = MINE_TASK.format(brand=pack.brand.name, n=pack.max_posts, count=count, evidence=block,
+                                market=market_block(pack, "mine"))
         traj.action(f"mine batch {b_idx}: up to {pack.max_posts} facts from {count} evidence items")
         feedback = ""
         for round_no in (1, 2):
@@ -245,8 +276,18 @@ def _same(a: MinedFact, b: MinedFact) -> bool:
     return set(a.evidence_ids) == set(b.evidence_ids) or norm(a.quote) == norm(b.quote)
 
 
-def rank(facts: list[MinedFact], ev: dict[str, Evidence], n: int) -> list[MinedFact]:
+def rank(facts: list[MinedFact], ev: dict[str, Evidence], n: int,
+         terms: dict[str, float] | None = None) -> list[MinedFact]:
+    """Recency, specificity and third-party proof; with market context, plus up to +1.5 for a
+    fact about what the audience searches for (weighted by search volume)."""
     today = date.today()
+    terms = terms or {}
+
+    def demand(f: MinedFact) -> float:
+        if not terms:
+            return 0.0
+        words = set(re.findall(r"[a-z0-9][a-z0-9+#.-]{2,}", norm(f"{f.headline} {f.quote} {f.category}")))
+        return min(sum(w for t, w in terms.items() if t in words), 1.5)
 
     def value(f: MinedFact) -> float:
         cited = [ev[i] for i in f.evidence_ids if i in ev]
@@ -258,7 +299,8 @@ def rank(facts: list[MinedFact], ev: dict[str, Evidence], n: int) -> list[MinedF
             recency = 0.8
         third_party = 1.2 if any(e.kind == "article" for e in cited) else 0.0
         proof = 0.6 if any(e.kind in ("testimonial", "structured") for e in cited) else 0.0
-        return recency + min(len(f.metrics), 3) * 0.8 + min(len(f.named_entities), 3) * 0.6 + third_party + proof
+        return (recency + min(len(f.metrics), 3) * 0.8 + min(len(f.named_entities), 3) * 0.6 + third_party
+                + proof + demand(f))
 
     ordered = sorted(facts, key=value, reverse=True)
     distinct: list[MinedFact] = []
@@ -279,8 +321,9 @@ def write_card(idx: int, fact: MinedFact, pack: TaskPack, h: harness_mod.Harness
         brand=pack.brand.name, url=pack.brand.url, today=date.today().isoformat(), n_slides=cfg.detail_slides,
         language=_LANGUAGE.get(pack.script, f"the language of {pack.brand.name}'s own website"),
         fact=json.dumps(fact.model_dump(), indent=1, ensure_ascii=False),
-        sources="\n\n".join(e.render() for e in sources),
+        sources="\n\n".join(e.render() for e in sources), market=market_block(pack, "write"),
     )
+    rivals = market.competitor_names(pack.market)
     skill_text = "\n\n".join(h.skills[s].body for s in skills if s in h.skills)
     card = Card(id=f"post_{idx}", status="rejected", fact=fact, sources=sources)
     draft: PostDraft | None = None
@@ -303,7 +346,8 @@ def write_card(idx: int, fact: MinedFact, pack: TaskPack, h: harness_mod.Harness
             problems = [f"writer failed: {exc}"]
             break
         draft = normalize_post(draft, fact, cfg.detail_slides)
-        problems = check_post(draft, fact, sources, pack.brand.name, banned, cfg.detail_slides, pack.script)
+        problems = check_post(draft, fact, sources, pack.brand.name, banned, cfg.detail_slides, pack.script,
+                              competitors=rivals)
         soft = []
         if not problems:
             problems, soft = _critic(draft, sources, skill_text, critic, idx, traj)
@@ -357,8 +401,14 @@ def generate(pack: TaskPack, harness_dir: Path, out_dir: Path, cfg: Settings) ->
     skills = choose_skills(h, pack, writer, traj)
     system = h.context(skills)
     ev = pack.evidence_by_id()
+    terms = market.keyword_terms(pack.market)
+    if pack.market:
+        m = pack.market
+        traj.observe(f"market context (DataForSEO, not evidence): competitors {[c.domain for c in m.competitors]}; "
+                     f"top searches {[k.keyword for k in m.brand_keywords[:6]]}; "
+                     f"gap topics {[k.keyword for k in m.gap_keywords[:6]]}")
     facts = mine(pack, system, writer, cfg, traj)
-    queue = rank(facts, ev, len(facts))
+    queue = rank(facts, ev, len(facts), terms)
     traj.observe(f"{len(facts)} facts passed checks; target {pack.max_posts} posts (minimum {cfg.min_posts}); "
                  f"order: {[f.headline for f in queue]}")
     cards: list[Card] = []
@@ -373,7 +423,7 @@ def generate(pack: TaskPack, harness_dir: Path, out_dir: Path, cfg: Settings) ->
             more = mine(pack, system, writer, cfg, traj, range(next_batch, next_batch + 2), facts)
             next_batch += 2
             facts += more
-            queue = rank(more, ev, len(more))
+            queue = rank(more, ev, len(more), terms)
             if not queue:
                 continue
         fact = queue.pop(0)

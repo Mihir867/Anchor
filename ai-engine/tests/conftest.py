@@ -18,7 +18,9 @@ E1 = ("Acme cut deployment time by 40% for Globex, the company said on Tuesday. 
 
 @pytest.fixture
 def cfg(tmp_path):
-    return replace(Settings(), api_key="test-key", runs_dir=tmp_path / "runs", repair_rounds=1)
+    # Never reach the real DataForSEO API from tests, even when .env has credentials.
+    return replace(Settings(), api_key="test-key", runs_dir=tmp_path / "runs", repair_rounds=1,
+                   dataforseo_login="", dataforseo_password="")
 
 
 @pytest.fixture

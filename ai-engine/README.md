@@ -36,7 +36,8 @@ carousel (`post_N_1.png` cover with logo, title and image; `post_N_2..3.png` exp
 URL ──► prepare (deterministic, once per run) ─────────────────────► TaskPack (frozen)
           crawl.py     Playwright: tokens, logo, screenshot, ≤14 rendered pages
           extract.py   pages → evidence items [E1..En] (+ JSON-LD, reviews, pricing, logos)
-          research.py  press → evidence items (must mention the brand)
+          research.py  press → evidence items (must mention the brand; Google News via DataForSEO + Bing)
+          market.py    DataForSEO → competitors, audience searches, content gaps (context, NOT evidence)
           classify     skill keywords + schema.org types; LLM only on ties
 
 TaskPack + harness/ ──► generate.py  (the executor: one "rollout")
@@ -130,6 +131,31 @@ roughly **350–400k tokens**, and single improver requests of about 12–20k to
 free tier (8k/min, 200k/day) cannot hold one. Before refining, the engine probes the
 improver's endpoint. If its per-minute limit is below `ANCHOR_REFINE_MIN_TPM`, or its daily
 quota is spent, it runs one rollout instead and says so in `report.md`.
+
+## Competitor & search context (DataForSEO)
+
+Optional; set `DATAFORSEO_LOGIN` and `DATAFORSEO_PASSWORD` (API access credentials) in `.env`.
+During `prepare`, before any rollout or Harness² step, `market.py` pulls:
+
+- **Competitors**: domains competing for the same organic keywords (Labs `competitors_domain`,
+  with marketplaces, social networks and encyclopedias filtered out).
+- **Audience searches**: the brand's highest-volume ranked keywords, excluding brand-name searches.
+- **Content gaps**: keywords the top 2 competitors rank top-20 for and the brand doesn't rank for at all.
+- **Google News** results for the industry skill's `news_queries`, alongside Bing.
+
+All of this lands in the frozen `TaskPack` (`pack.market`) and in `pack/source/market.md`, so every
+rollout, the Harness² improver and the blind selector see identical context. It is **never
+evidence**:
+
+- The miner uses it to *choose* facts that differentiate the brand or answer real searches.
+- `rank()` gives facts matching high-volume searches a bonus of up to +1.5.
+- The writer uses it to *angle and word* posts: hooks, slides and hashtags in the audience's terms.
+- `verify.check_post` rejects any post that names a competitor the cited evidence doesn't mention.
+
+Responses are cached for `DATAFORSEO_CACHE_DAYS` (7), so refines and reruns don't pay twice. Spend
+is reported in `report.md` and `result.json`. A typical run makes 4 Labs calls plus up to 3 News
+calls, which costs a few cents. Any API failure degrades to "no market context" and never fails a
+run. `DATAFORSEO_LOCATION_CODE` (2840 = US) and `DATAFORSEO_LANGUAGE_CODE` (`en`) choose the market.
 
 ## Storage (Postgres + Cloudinary)
 

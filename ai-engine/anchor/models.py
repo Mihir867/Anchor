@@ -45,6 +45,35 @@ class BrandKit(BaseModel):
     social_links: dict[str, str] = Field(default_factory=dict)
 
 
+class Competitor(BaseModel):
+    domain: str
+    shared_keywords: int = 0  # organic keywords both domains rank for
+    avg_position: float = 0.0
+    organic_traffic: int = 0  # DataForSEO estimated monthly organic visits
+
+
+class SearchKeyword(BaseModel):
+    keyword: str
+    search_volume: int = 0
+    position: Optional[int] = None  # rank of the brand (or `competitor`) for it
+    url: Optional[str] = None
+    title: Optional[str] = None
+    intent: Optional[str] = None  # informational / commercial / transactional / navigational
+    competitor: Optional[str] = None  # set on content gaps: the rival that ranks for it
+
+
+class MarketIntel(BaseModel):
+    """Competitive and search-demand context (market.py). Steers selection and angle; it is
+    never evidence, so nothing in it may be stated as fact in a post."""
+
+    source: str = "dataforseo"
+    location_code: int = 2840
+    language_code: str = "en"
+    competitors: list[Competitor] = Field(default_factory=list)
+    brand_keywords: list[SearchKeyword] = Field(default_factory=list)
+    gap_keywords: list[SearchKeyword] = Field(default_factory=list)
+
+
 class TaskPack(BaseModel):
     """Everything a rollout needs. Built once per run; identical input to every rollout."""
 
@@ -58,6 +87,7 @@ class TaskPack(BaseModel):
     brand: BrandKit
     evidence: list[Evidence]
     pages_crawled: list[str] = Field(default_factory=list)
+    market: Optional[MarketIntel] = None  # DataForSEO context, when configured
 
     def evidence_by_id(self) -> dict[str, Evidence]:
         return {e.id: e for e in self.evidence}

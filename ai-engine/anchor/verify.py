@@ -176,7 +176,8 @@ def normalize_post(post: PostDraft, fact: MinedFact, detail_slides: int = 2) -> 
 
 
 def check_post(post: PostDraft, fact: MinedFact, sources: list[Evidence], brand_name: str,
-               banned: list[str], detail_slides: int = 2, script: str = "LATIN") -> list[str]:
+               banned: list[str], detail_slides: int = 2, script: str = "LATIN",
+               competitors: list[str] | None = None) -> list[str]:
     problems: list[str] = []
     corpus = " ".join(norm(f"{e.text} {e.title} {e.date or ''}") for e in sources) + " " + norm(brand_name)
     allowed = numbers(corpus)
@@ -235,6 +236,16 @@ def check_post(post: PostDraft, fact: MinedFact, sources: list[Evidence], brand_
         long = [b for b in sl.bullets if len(b) > 120 or not b.strip()]
         if long:
             problems.append(f"slide {i} has bullets over 120 chars or empty: {long[:1]}")
+    # Competitors come from market context (search data), not evidence: naming one is only
+    # allowed when the cited evidence itself does (e.g. a press article about a partnership).
+    everything = norm(" ".join([li, cap, post.poster_headline, post.poster_kicker, " ".join(post.hashtags)]
+                               + [f"{sl.title} " + " ".join(sl.bullets) for sl in post.slides]))
+    own = norm(brand_name)
+    named = sorted({c for c in competitors or [] if norm(c) and norm(c) not in own and norm(c) not in corpus
+                    and re.search(rf"(?<![\w.]){re.escape(norm(c))}(?![\w])", everything)})
+    if named:
+        problems.append(f"names competitor(s) {named} that the cited evidence does not mention; "
+                        "describe what the brand does instead of comparing")
     if brand_name and norm(brand_name) not in norm(li + " " + cap):
         problems.append(f"neither post names the brand {brand_name!r}")
     return problems

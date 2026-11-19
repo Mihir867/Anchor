@@ -7,7 +7,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from . import generate, progress, render
+from . import generate, market, progress, render
 from .config import Settings, settings
 from . import harness as harness_mod
 from .llm import LLM, reset_usage, usage_snapshot
@@ -23,6 +23,7 @@ def run(url: str, *, mode: str = "refine", k: int = 1, max_posts: int = 3, indus
     mode="refine": Harness² Propose-Probe-Compose (4k rollouts) with per-industry learning."""
     cfg = cfg or settings()
     reset_usage()
+    market.reset_cost()
     skipped = ""
     if mode == "refine":
         skipped = refine_blocker(cfg)
@@ -116,6 +117,21 @@ def finalize(pack, run_dir: Path, chosen: Path, harness_used: Path, cfg: Setting
         f"- posts verified: {verified_n} / {len(result.cards)}"
         + (f" (+{fallback_n} fallback post delivered so the run is not empty)" if fallback_n else ""), "",
     ]
+    if pack.market:
+        m = pack.market
+        report += ["## Market context (DataForSEO)", "",
+                   "Steered which facts were picked and how posts were angled; never used as evidence.", "",
+                   f"- competitors: {', '.join(c.domain for c in m.competitors) or 'none found'}",
+                   f"- audience searches: {', '.join(k.keyword for k in m.brand_keywords[:10]) or 'none'}",
+                   f"- content gaps: {', '.join(f'{k.keyword} ({k.competitor})' for k in m.gap_keywords[:8]) or 'none'}"]
+        spend = market.cost_snapshot()
+        if spend["calls"]:
+            report += [f"- DataForSEO: {spend['calls']} live call(s), ${spend['usd']:.4f} (cached calls are free)"]
+        report += [""]
+    elif market.blocked_reason():
+        report += ["## Market context (DataForSEO)", "",
+                   f"Skipped: DataForSEO refused the request ({market.blocked_reason()}). Posts were "
+                   "written without competitor context.", ""]
     if stages_note:
         report += ["## Harness²", "", stages_note, ""]
     usage = usage_snapshot()
@@ -135,6 +151,8 @@ def finalize(pack, run_dir: Path, chosen: Path, harness_used: Path, cfg: Setting
             f"{fallback_n} post(s) could not be fully verified and are marked for review" if fallback_n else "",
         ) if n),
         "token_usage": usage_snapshot(),
+        "competitors": [c.domain for c in pack.market.competitors] if pack.market else [],
+        "dataforseo": market.cost_snapshot(),
         "posts_md": str(out / "posts.md"),
         "posters": [str(out / n) for names in posters.values() for n in names if n.endswith(".png")],
         "carousels": [str(out / names[-1]) for names in posters.values()],

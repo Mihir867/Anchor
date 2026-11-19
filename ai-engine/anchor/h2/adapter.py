@@ -4,7 +4,8 @@ Mapping onto the Harness² method:
   task            one brand run (a frozen TaskPack)
   domain          the industry playbook (saas, hospitality, ecommerce, ...): the experience
                   library is per industry, so lessons from one hotel guide the next hotel
-  source          pack/source/{brand.md,evidence.md}: what the selector checks claims against
+  source          pack/source/{brand.md,evidence.md}: what the selector checks claims against,
+                  plus market.md (DataForSEO competitors, searches, content gaps) when configured
   execute         one rollout of anchor.generate with a candidate harness tree
   trajectory      the rollout's [ACTION]/[OBSERVATION]/[ERROR] log
   deliverable     posts.md (verified posts only)
@@ -26,7 +27,10 @@ from ..prepare import load_pack
 PROMPTS = BenchPrompts(
     work=(
         "Turn a company's frozen evidence pack (its rendered website plus press coverage, split "
-        "into numbered evidence items) into evidence-grounded LinkedIn and Instagram posts. Each "
+        "into numbered evidence items) into evidence-grounded LinkedIn and Instagram posts. When "
+        "source/market.md exists it holds search-data market context (organic competitors, what the "
+        "audience searches for, topics competitors rank for and the brand does not); it steers fact "
+        "choice and angle but is never evidence. Each "
         "run loads the industry skill, selects post-worthy facts that each carry a verbatim quote "
         "from a cited evidence item, writes channel-native posts per fact, and passes "
         "deterministic grounding checks (verbatim quote, every number present in cited evidence, "
@@ -52,8 +56,11 @@ PROMPTS = BenchPrompts(
         "frontmatter, which code enforces. Keep the frontmatter keys name, description, industry, "
         "keywords, schema_types, crawl_paths and news_queries valid: they route and crawl future "
         "runs. A new skill without `industry: true` is offered to every run as an optional skill "
-        "and loaded when its description's trigger applies. Never write this brand's facts into "
-        "the harness."
+        "and loaded when its description's trigger applies. Market context (source/market.md) "
+        "shows which differentiators and search intents matter in this industry: encode the "
+        "industry-level pattern (e.g. which kinds of facts stand out against typical competitors, "
+        "how to echo search intent in hooks and hashtags), never this brand's competitors, "
+        "keywords or facts."
     ),
     yardstick=(
         "A strong run turns specific, recent, third-party-confirmed facts into posts the "
@@ -71,7 +78,10 @@ PROMPTS = BenchPrompts(
         "Every number, name, date, price, award and superlative in a post must appear in "
         "context/source/evidence.md under one of the evidence ids that post lists; an invented "
         "detail disqualifies the post set. Prefer the set with more VERIFIED posts only when they "
-        "are equally faithful. Each post must name the brand, open LinkedIn with a hook line that "
+        "are equally faithful. A post must not name or compare to a competitor from "
+        "context/source/market.md unless its cited evidence does; among faithful sets, prefer the "
+        "one whose posts better show what sets the brand apart and speak to what its audience "
+        "searches for. Each post must name the brand, open LinkedIn with a hook line that "
         "works before 'see more', and read as native to its channel without clichés."
     ),
 )
@@ -107,7 +117,8 @@ class AnchorAdapter:
         return (
             f"Write up to {self.pack.max_posts} social posts for {b.name} ({b.url}), each with a "
             "LinkedIn post and an Instagram caption plus poster copy, grounded ONLY in the evidence "
-            "pack in source/ (brand.md, evidence.md). Every factual claim must trace to a cited "
+            "pack in source/ (brand.md, evidence.md; market.md, if present, is positioning context, "
+            "not evidence). Every factual claim must trace to a cited "
             "evidence id; anything unverifiable is left out. Deliver posts.md listing each verified "
             "post with its LinkedIn text, Instagram caption, hashtags, poster copy and sources."
         )
