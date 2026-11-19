@@ -62,7 +62,8 @@ class Settings:
     refine_min_tpm: int = field(default_factory=lambda: int(_env("ANCHOR_REFINE_MIN_TPM", "30000")))
     runs_dir: Path = field(default_factory=lambda: Path(_env("ANCHOR_RUNS_DIR", str(ENGINE_DIR / "runs"))))
     harness_dir: Path = field(default_factory=lambda: Path(_env("ANCHOR_HARNESS_DIR", str(ENGINE_DIR / "harness"))))
-    max_pages: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_PAGES", "14")))
+    # Subpages rendered after the home page (most important first; see crawl.candidate_urls).
+    max_pages: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_PAGES", "8")))
     max_articles: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_ARTICLES", "6")))
     repair_rounds: int = field(default_factory=lambda: int(_env("ANCHOR_REPAIR_ROUNDS", "2")))
     max_extra_posts: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_EXTRA_POSTS", "2")))

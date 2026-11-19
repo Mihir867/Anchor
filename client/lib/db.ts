@@ -110,6 +110,7 @@ interface PostRow {
   sources: PostCard["sources"];
   slide_urls: string[];
   pdf_url: string | null;
+  notes: string[] | null;
 }
 
 export async function dbListRuns(limit = 50): Promise<RunItem[]> {
@@ -156,7 +157,7 @@ export async function dbGetRun(id: string): Promise<RunJobResponse | null> {
 
   const posts = await pool().query<PostRow>(
     `SELECT card_id, status, voice, linkedin, instagram_caption, hashtags, poster_headline,
-            poster_kicker, poster_stat, slides, fact, sources, slide_urls, pdf_url
+            poster_kicker, poster_stat, slides, fact, sources, slide_urls, pdf_url, notes
        FROM posts WHERE run_id = $1 ORDER BY position`,
     [run.id],
   );
@@ -164,6 +165,9 @@ export async function dbGetRun(id: string): Promise<RunJobResponse | null> {
   const cards: PostCard[] = posts.rows.map((p) => ({
     id: p.card_id,
     status: p.status,
+    notes: p.notes ?? [],
+    // The engine marks fallback posts with this leading note (anchor/generate.py FALLBACK_NOTE).
+    fallback: (p.notes ?? []).some((n) => n.startsWith("Fallback post:")),
     fact: {
       headline: p.fact?.headline ?? "",
       category: p.fact?.category,

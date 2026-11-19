@@ -64,7 +64,7 @@ TOKENS_JS = r"""() => {
   const fam = (el) => el ? getComputedStyle(el).fontFamily.split(",")[0].replace(/["']/g, "").trim() : null;
   let bg = hex(getComputedStyle(document.body).backgroundColor) || hex(getComputedStyle(document.documentElement).backgroundColor) || "#FFFFFF";
   const imgs = Array.from(document.images).filter(i => i.naturalWidth >= 600 && i.naturalHeight >= 400).map(i => i.currentSrc || i.src).slice(0, 12);
-  const links = Array.from(document.querySelectorAll("a[href]")).map(a => a.href);
+  const links = Array.from(new Set(Array.from(document.querySelectorAll("a[href]")).map(a => a.href))).slice(0, 400);
   return { title: document.title || "", description: meta("description") || meta("og:description") || "",
     site_name: meta("og:site_name") || "", og_image: meta("og:image") || "", ranked_colors: ranked.slice(0, 6),
     background: bg, text: hex(getComputedStyle(document.body).color) || "#111111",
@@ -72,6 +72,76 @@ TOKENS_JS = r"""() => {
     font_faces: fontFaces.slice(0, 40), images: imgs, links,
     h1: (document.querySelector("h1") || {}).innerText || "" };
 }"""
+
+# Run just before page.content(): keep only what extract.py reads (text, headings, quotes, meta,
+# JSON-LD, <time>, class names, img alt). Inline JS bundles, CSS, SVG and iframes are often
+# megabytes per page; dropping them in the browser keeps both Chromium and the Python parse small.
+SLIM_JS = r"""(maxChars) => {
+  document.querySelectorAll('script:not([type="application/ld+json"]), style, link, noscript, svg, iframe, '
+    + 'video, audio, canvas, template, object, embed, source, picture > source, map, dialog').forEach(e => e.remove());
+  const keep = new Set(["class", "alt", "href", "src", "datetime", "content", "property", "name", "type", "id", "lang"]);
+  document.querySelectorAll("*").forEach(el => {
+    for (const a of Array.from(el.attributes)) if (!keep.has(a.name)) el.removeAttribute(a.name);
+    if (el.tagName === "IMG" && (el.getAttribute("src") || "").startsWith("data:")) el.removeAttribute("src");
+  });
+  const html = document.documentElement.outerHTML;
+  return html.length > maxChars ? html.slice(0, maxChars) : html;
+}"""
+# Enough for every evidence chunk a page can yield (extract keeps ~70 items across all pages).
+_HTML_CAP = 600_000
+
+# Third parties that add memory and network time but never carry brand content: analytics,
+# ads, tag managers, chat widgets, session replay, embedded players.
+_THIRD_PARTY = re.compile(
+    r"(googletagmanager|google-analytics|googleadservices|doubleclick|googlesyndication|facebook\.net|"
+    r"connect\.facebook|hotjar|clarity\.ms|segment\.(io|com)|mixpanel|amplitude|fullstory|heap(analytics)?\.|"
+    r"intercom|drift\.com|zendesk|zdassets|hubspot|hs-scripts|hs-analytics|hsforms|crisp\.chat|tawk\.to|"
+    r"livechat|olark|optimizely|newrelic|nr-data|sentry|datadoghq|bugsnag|linkedin\.com/(li|px)|snap\.licdn|"
+    r"tiktok|pinterest|twitter\.com/i|ads-twitter|bing\.com/(bat|action)|youtube\.com/embed|ytimg|vimeo|"
+    r"wistia|vidyard|cookiebot|onetrust|cookielaw|trustarc|recaptcha|hcaptcha|gstatic\.com/recaptcha)",
+    re.I,
+)
+# Requests nothing in the crawl reads. Home keeps images/fonts/CSS (screenshot, logo, tokens).
+_ALWAYS_SKIP = {"media", "websocket", "eventsource", "manifest", "texttrack", "ping", "beacon"}
+# Subpages are only read for text.
+_SUBPAGE_SKIP = _ALWAYS_SKIP | {"image", "font", "stylesheet"}
+
+
+def _site(host: str) -> str:
+    """Rough registrable domain (last two labels): enough to tell first party from third."""
+    return ".".join(host.lower().removeprefix("www.").split(".")[-2:])
+
+
+def _blocked(url: str, resource_type: str, site: str, skip_types: set[str]) -> bool:
+    if resource_type in skip_types:
+        return True
+    host = urlparse(url).netloc.split(":")[0]
+    # Never block the brand's own requests (crawling hubspot.com must still load hubspot.com).
+    return _site(host) != site and bool(_THIRD_PARTY.search(url))
+
+
+def _router(site_url: str, skip_types: set[str]):
+    site = _site(urlparse(site_url).netloc.split(":")[0])
+
+    async def route(r):
+        req = r.request
+        try:
+            main_nav = req.is_navigation_request() and req.frame.parent_frame is None
+        except Exception:
+            main_nav = False
+        if not main_nav and _blocked(req.url, req.resource_type, site, skip_types):
+            await r.abort()
+        else:
+            await r.continue_()
+    return route
+
+
+async def _slim_html(page) -> str:
+    try:
+        return await page.evaluate(SLIM_JS, _HTML_CAP)
+    except Exception:  # page navigated or crashed mid-evaluate: fall back to the raw DOM, capped
+        return (await page.content())[:_HTML_CAP]
+
 
 LOGO_SELECTORS = [
     'header a[href="/"] img', 'header a[href="/"] svg', 'nav a[href="/"] img', 'nav a[href="/"] svg',
@@ -202,9 +272,9 @@ async def crawl_home(url: str, assets_dir: Path) -> CrawlResult:
         # OOM-killed on a 512 MB instance (1x: ~400 MB). Only the logo is rendered at 2x (_logo).
         ctx = await browser.new_context(viewport={"width": 1440, "height": 900}, user_agent=UA,
                                         device_scale_factor=1)
-        # Video is never used (screenshot and tokens come from the first frame/poster anyway).
-        await ctx.route("**/*", lambda route: route.abort() if route.request.resource_type == "media"
-                        else route.continue_())
+        # Video, trackers, chat widgets and embeds are never used (screenshot and tokens come
+        # from the first frame anyway) and are the bulk of a heavy page's memory.
+        await ctx.route("**/*", _router(url, _ALWAYS_SKIP))
         page = await ctx.new_page()
         await _goto(page, url)
         final_url = page.url
@@ -219,7 +289,7 @@ async def crawl_home(url: str, assets_dir: Path) -> CrawlResult:
             raise SiteBlocked(f"{url} is behind bot protection ({reason!r}); the crawler was not let through")
         await page.screenshot(path=str(shot))
         logo = await _logo(page, assets_dir / "logo.png")
-        html = await page.content()
+        html = await _slim_html(page)
         await browser.close()
     log.info("[crawl] home %s: title=%r, %d chars of text", final_url, tokens.get("title", "")[:80], len(body_text))
     return CrawlResult(
@@ -276,69 +346,87 @@ def candidate_urls(result: CrawlResult, priority_paths: list[str], limit: int) -
         if u not in ordered and u.rstrip("/") != result.url.rstrip("/"):
             ordered.append(u)
 
+    # Most important first, so the small page budget is spent on pages that exist: the playbook's
+    # paths the home page links to, then other high-signal links from the home page, then the
+    # playbook paths guessed blind (often 404), then the sitemap.
     links = [l for l in result.tokens.get("links", []) if isinstance(l, str)]
-    for path in list(priority_paths) + GENERIC_PATHS:
-        stem = path.strip("/").lower()
-        match = next((l for l in links if urlparse(l).path.strip("/").lower() == stem), None)
-        add(match or urljoin(origin, path))
+    by_stem: dict[str, str] = {}
+    for l in links:
+        by_stem.setdefault(urlparse(l).path.strip("/").lower(), l)
+    paths = list(dict.fromkeys(list(priority_paths) + GENERIC_PATHS))
+    for path in paths:
+        if path.strip("/").lower() in by_stem:
+            add(by_stem[path.strip("/").lower()])
     signal = re.compile(r"(about|press|news|blog|customer|case|award|story|stories|partner|pricing|feature|product|offer|dining|room|event|collection|review)", re.I)
     for l in links:
         if signal.search(urlparse(l).path):
             add(l)
-    for l in _sitemap(origin):
-        if signal.search(urlparse(l).path):
-            add(l)
+    for path in paths:
+        add(urljoin(origin, path))
+    if len(ordered) < limit + 4:  # the sitemap is only fetched when the home page was not enough
+        for l in _sitemap(origin):
+            if signal.search(urlparse(l).path):
+                add(l)
     return ordered
 
 
 def _sitemap(origin: str) -> list[str]:
+    """First 300 <loc> URLs. Streamed and capped: some sitemaps are tens of megabytes."""
     try:
-        r = httpx.get(f"{origin}/sitemap.xml", headers={"User-Agent": UA}, timeout=10, follow_redirects=True)
-        if r.status_code == 200:
-            return re.findall(r"<loc>\s*([^<]+?)\s*</loc>", r.text)[:300]
+        with httpx.stream("GET", f"{origin}/sitemap.xml", headers={"User-Agent": UA}, timeout=10,
+                          follow_redirects=True) as r:
+            if r.status_code != 200:
+                return []
+            buf = bytearray()
+            for chunk in r.iter_bytes():
+                buf += chunk
+                if len(buf) >= 2_000_000:
+                    break
+        return re.findall(r"<loc>\s*([^<]+?)\s*</loc>", buf.decode("utf-8", errors="replace"))[:300]
     except httpx.HTTPError:
         pass
     return []
 
 
-# Subpages are only read for text: skipping these keeps memory low and pages fast.
-_SKIP_RESOURCES = {"image", "media", "font", "stylesheet"}
-
-
-async def crawl_pages(urls: list[str], limit: int, concurrency: int = 2) -> list[Page]:
+async def crawl_pages(urls: list[str], limit: int, concurrency: int | None = None) -> list[Page]:
+    """Render subpages for their text only. One page at a time by default: on small instances a
+    second concurrent page roughly doubles Chromium's heap (ANCHOR_CRAWL_CONCURRENCY raises it)."""
     from playwright.async_api import async_playwright
 
     pages: list[Page] = []
+    concurrency = concurrency or max(1, int(os.environ.get("ANCHOR_CRAWL_CONCURRENCY", "1") or 1))
     sem = asyncio.Semaphore(concurrency)
     async with async_playwright() as p:
         browser = await _launch(p)
         ctx = await browser.new_context(viewport={"width": 1366, "height": 900}, user_agent=UA)
-        await ctx.route("**/*", lambda route: route.abort() if route.request.resource_type in _SKIP_RESOURCES
-                        else route.continue_())
+        await ctx.route("**/*", _router(urls[0] if urls else "", _SUBPAGE_SKIP))
 
         async def one(u: str) -> Page | None:
             async with sem:
+                if len(pages) >= limit:  # enough pages already: skip the spare candidates
+                    return None
                 pg = await ctx.new_page()
                 try:
                     resp = await pg.goto(u, wait_until="domcontentloaded", timeout=25000)
                     if not resp or resp.status >= 400:
                         return None
-                    await pg.wait_for_timeout(1200)
+                    await pg.wait_for_timeout(900)
                     title = await pg.title()
                     text = await pg.evaluate("() => (document.body && document.body.innerText) || ''")
                     if blocked_reason(title, text):
                         log.info("skip %s: bot-protection page", u)
                         return None
-                    return Page(pg.url, await pg.content(), title)
+                    got = Page(pg.url, await _slim_html(pg), title)
+                    if len(pages) < limit and all(got.url != x.url for x in pages):
+                        pages.append(got)
+                    return got
                 except Exception as exc:
                     log.debug("skip %s: %s", u, exc)
                     return None
                 finally:
                     await pg.close()
 
-        for got in await asyncio.gather(*(one(u) for u in urls[: limit + 4])):
-            if got and len(pages) < limit and all(got.url != x.url for x in pages):
-                pages.append(got)
+        await asyncio.gather(*(one(u) for u in urls[: limit + 4]))
         await browser.close()
     log.info("Rendered %d subpages", len(pages))
     return pages

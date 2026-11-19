@@ -88,6 +88,10 @@ def finalize(pack, run_dir: Path, chosen: Path, harness_used: Path, cfg: Setting
     result = RolloutResult.model_validate_json((chosen / "cards.json").read_text(encoding="utf-8"))
     out = run_dir / "output"
     out.mkdir(parents=True, exist_ok=True)
+    shutil.copy2(chosen / "trajectory.md", out / "trajectory.md")
+    # Never finish a run with zero posts: deliver the best draft or a brand intro, flagged.
+    result = generate.ensure_post(result, pack, harness_used, cfg,
+                                  generate.Trajectory(out / "trajectory.md", append=True))
     progress.report("rendering", verified=len(result.verified))
     posters = render.render_all(result.verified, pack, out, cfg)
     for card in result.verified:
@@ -97,10 +101,11 @@ def finalize(pack, run_dir: Path, chosen: Path, harness_used: Path, cfg: Setting
         card.pdf_path = str(out / names[-1])
     (out / "posts.md").write_text(generate.render_markdown(result, pack, posters), encoding="utf-8")
     (out / "deck.json").write_text(result.model_dump_json(indent=2), encoding="utf-8")
-    shutil.copy2(chosen / "trajectory.md", out / "trajectory.md")
     if Path(harness_used).is_dir():
         shutil.copytree(harness_used, out / "harness", dirs_exist_ok=True)
     rejected = [c for c in result.cards if c.status != "verified"]
+    fallback_n = sum(c.fallback for c in result.verified)
+    verified_n = len(result.verified) - fallback_n
     report = [
         f"# Run report — {pack.brand.name}", "",
         f"- url: {pack.url}", f"- industry playbook: `{pack.industry}` ({pack.industry_reason})",
@@ -108,7 +113,8 @@ def finalize(pack, run_dir: Path, chosen: Path, harness_used: Path, cfg: Setting
         f"({sum(e.kind == 'article' for e in pack.evidence)} from press)",
         f"- mode: {mode}" + (" (selection fell back to best delivered rollout)" if fell_back else ""),
         f"- harness used: `{Path(harness_used).name}` (copied to output/harness/)",
-        f"- posts verified: {len(result.verified)} / {len(result.cards)}", "",
+        f"- posts verified: {verified_n} / {len(result.cards)}"
+        + (f" (+{fallback_n} fallback post delivered so the run is not empty)" if fallback_n else ""), "",
     ]
     if stages_note:
         report += ["## Harness²", "", stages_note, ""]
@@ -123,8 +129,11 @@ def finalize(pack, run_dir: Path, chosen: Path, harness_used: Path, cfg: Setting
     (out / "report.md").write_text("\n".join(report), encoding="utf-8")
     summary = {
         "task_id": pack.task_id, "brand": pack.brand.name, "industry": pack.industry, "mode": mode,
-        "verified_posts": len(result.verified), "output_dir": str(out),
-        "note": stages_note if stages_note.startswith("Harness² refine skipped") else "",
+        "verified_posts": len(result.verified), "fallback_posts": fallback_n, "output_dir": str(out),
+        "note": "; ".join(n for n in (
+            stages_note if stages_note.startswith("Harness² refine skipped") else "",
+            f"{fallback_n} post(s) could not be fully verified and are marked for review" if fallback_n else "",
+        ) if n),
         "token_usage": usage_snapshot(),
         "posts_md": str(out / "posts.md"),
         "posters": [str(out / n) for names in posters.values() for n in names if n.endswith(".png")],

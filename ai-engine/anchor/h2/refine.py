@@ -76,10 +76,12 @@ def refine(pack: TaskPack, run_dir: Path, cfg: Settings, *, k: int = 1, mode: st
         fell_back = True
         candidates = [Path(b["run_dir"]) for b in res.base] + list(
             (adapter.spec.runs_root / "rollouts").glob("**/cards.json"))
-        best = max((p.parent if p.name == "cards.json" else p for p in candidates),
-                   key=lambda d: _verified_count(d), default=None)
-        if best is None or _verified_count(best) == 0:
-            raise RuntimeError("Harness² produced no rollout with a verified post; see " + str(summary))
+        dirs = [p.parent if p.name == "cards.json" else p for p in candidates]
+        best = max((d for d in dirs if (d / "cards.json").is_file()), key=_verified_count, default=None)
+        if best is None or not (best / "cards.json").is_file():
+            raise RuntimeError("Harness² produced no rollout output; see " + str(summary))
+        # Zero verified everywhere: still hand back a rollout; pipeline.finalize then delivers a
+        # flagged fallback post (generate.ensure_post) instead of failing the run.
         chosen_dir, label = best, best.name
     harness_dir = _harness_for(adapter, label)
     log.info("[harness2] selected %s (%s)", label, chosen_dir)

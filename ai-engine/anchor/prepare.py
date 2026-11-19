@@ -111,14 +111,14 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
     news_items = research.news_evidence(name, domain, skill.list_meta("news_queries"), cfg.max_articles, script)
 
     ranked = sorted(site_items + news_items, key=lambda d: d.pop("_rank", 0), reverse=True)[:70]
+    if len(ranked) < MIN_EVIDENCE:
+        # Thin site (mostly images, heavy JS, little copy). Still deliver: the home page's own
+        # title/description/headline become citable items, and generate.ensure_post guarantees
+        # at least one (clearly labelled) post.
+        log.warning("[prepare] little material for %s: %d site items from %d pages, %d news items; "
+                    "continuing with home-page basics", url, len(site_items), 1 + len(pages), len(news_items))
+        ranked += _home_basics(home, name, domain, {norm_key(d["text"]) for d in ranked})
     evidence = [Evidence(id=f"E{i}", **d) for i, d in enumerate(ranked, start=1)]
-    if len(evidence) < MIN_EVIDENCE:
-        log.warning("[prepare] too little material for %s: %d site items from %d pages, %d news items",
-                    url, len(site_items), 1 + len(pages), len(news_items))
-        raise PrepareError(
-            f"only {len(evidence)} evidence items found for {url}; refusing to write posts without "
-            "verifiable material (site may block crawlers or be mostly images)"
-        )
 
     t = home.tokens
     colors = t.get("ranked_colors") or []
@@ -145,6 +145,26 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
              len(evidence), sum(e.kind != "article" for e in evidence),
              sum(e.kind == "article" for e in evidence), len(pack.pages_crawled))
     return pack, run_dir
+
+
+def norm_key(text: str) -> str:
+    return re.sub(r"\s+", " ", text or "").strip().lower()[:160]
+
+
+def _home_basics(home: crawl.CrawlResult, name: str, domain: str, seen: set[str]) -> list[dict]:
+    """The home page's title, meta description and headline as evidence items (deduplicated)."""
+    t = home.tokens
+    out: list[dict] = []
+    for text in (t.get("description", ""), t.get("h1", ""), t.get("title", "")):
+        text = extract.clean(text)[:900]
+        if len(text) >= 8 and norm_key(text) not in seen:
+            seen.add(norm_key(text))
+            out.append({"kind": "site", "url": home.url, "title": extract.clean(t.get("title", ""))[:120],
+                        "date": None, "text": text})
+    if not out:
+        out.append({"kind": "site", "url": home.url, "title": name, "date": None,
+                    "text": f"{name} ({domain}) website home page."})
+    return out
 
 
 def write_pack(pack: TaskPack, pack_dir: Path, customers: list[str]) -> None:

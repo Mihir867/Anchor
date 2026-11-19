@@ -19,16 +19,17 @@ from . import progress
 from .config import Settings
 from .llm import LLM, LLMError
 from .models import (Card, CriticReport, Evidence, MinedFact, MinedFacts, PostDraft,
-                     RolloutResult, SkillChoice, TaskPack)
+                     RolloutResult, SkillChoice, Slide, TaskPack)
 from .verify import GLOBAL_BANNED, check_fact, check_post, norm, normalize_post
 
 log = logging.getLogger("anchor.generate")
 
 
 class Trajectory:
-    def __init__(self, path: Path):
+    def __init__(self, path: Path, append: bool = False):
         self.path = path
-        self.lines: list[str] = []
+        self.lines: list[str] = (path.read_text(encoding="utf-8").splitlines()
+                                 if append and path.is_file() else [])
 
     def _add(self, tag: str, text: str) -> None:
         self.lines.append(f"[{tag}] {text.strip()}")
@@ -395,11 +396,90 @@ def generate(pack: TaskPack, harness_dir: Path, out_dir: Path, cfg: Settings) ->
     return result
 
 
+FALLBACK_NOTE = ("Fallback post: no candidate passed every verification check, so this one is "
+                 "delivered so the run is not empty. Review it before publishing.")
+
+
+def ensure_post(result: RolloutResult, pack: TaskPack, harness_dir: Path, cfg: Settings,
+                traj: Trajectory) -> RolloutResult:
+    """Guarantee at least one deliverable post. A run that ends with zero posts is a dead end
+    for the user, so when nothing verified:
+      1. the rejected draft with the fewest problems is delivered, flagged as a fallback;
+      2. otherwise a brand-introduction post is written from the most specific evidence
+         (it may even pass verification);
+      3. if the model cannot write at all, a plain template post is built from the brand kit.
+    Fallback posts carry `fallback=True` and a note telling the reader to review them."""
+    if result.verified:
+        return result
+    drafted = [c for c in result.cards if c.post is not None]
+    if drafted:
+        card = min(drafted, key=lambda c: len(c.problems))
+        _mark_fallback(card)
+        traj.observe(f"no verified post; delivering {card.id} as a fallback ({len(card.problems)} unresolved problems)")
+        return result
+    fact = _intro_fact(pack)
+    card: Card | None = None
+    try:
+        h = harness_mod.load(harness_dir)
+        card = write_card(len(result.cards) + 1, fact, pack, h, [pack.industry] if pack.industry in h.skills else [],
+                          LLM(cfg.model, cfg=cfg), LLM(cfg.critic_model, cfg=cfg), cfg, traj)
+    except Exception as exc:  # harness unreadable, model unreachable...: fall through to template
+        log.warning("[fallback] intro post could not be written: %s", exc)
+    if card is None or card.post is None:
+        card = Card(id=f"post_{len(result.cards) + 1}", status="rejected", fact=fact,
+                    sources=[e for e in pack.evidence if e.id in fact.evidence_ids],
+                    post=_template_post(pack, fact, cfg.detail_slides),
+                    problems=["written from a template: the model could not produce a post"])
+    if card.status != "verified":
+        _mark_fallback(card)
+    traj.observe(f"no verified post from mined facts; delivered brand intro {card.id} "
+                 f"({'verified' if not card.fallback else 'fallback'})")
+    result.cards.append(card)
+    return result
+
+
+def _mark_fallback(card: Card) -> None:
+    card.status = "verified"  # deliverable: rendered, saved and shown like any other post
+    card.fallback = True
+    card.notes = [FALLBACK_NOTE] + [f"unconfirmed: {p}" for p in card.problems[:5]]
+
+
+def _intro_fact(pack: TaskPack) -> MinedFact:
+    b = pack.brand
+    cited = [e for e in pack.evidence if e.kind != "article"][:3] or pack.evidence[:3]
+    first = cited[0].text if cited else (b.description or b.tagline or b.name)
+    quote = re.split(r"(?<=[.!?])\s+", first.strip())[0][:300]
+    headline = b.tagline if 8 <= len(b.tagline) <= 90 else f"Meet {b.name}"
+    return MinedFact(headline=headline[:90], category="Brand introduction",
+                     evidence_ids=[e.id for e in cited], quote=quote,
+                     why_it_matters=(b.description or f"What {b.name} does, in its own words.")[:300])
+
+
+def _template_post(pack: TaskPack, fact: MinedFact, n_slides: int) -> PostDraft:
+    """Deterministic last resort: only the brand's own words, no claims added."""
+    b = pack.brand
+    about = (b.description or fact.quote or b.tagline).strip()
+    tag = "#" + re.sub(r"[^0-9A-Za-z]+", "", b.name)[:30] if re.sub(r"[^0-9A-Za-z]+", "", b.name) else ""
+    hashtags = [t for t in (tag,) if t]
+    lines = [s for s in re.split(r"(?<=[.!?])\s+", " ".join(e.text for e in pack.evidence[:4])) if 20 <= len(s) <= 120]
+    bullets = lines[: 2 * n_slides] or [about[:120]]
+    slides = [Slide(title=("About " + b.name)[:60] if i == 0 else f"More from {b.name}"[:60],
+                    bullets=bullets[i * 2:(i + 1) * 2] or bullets[:1]) for i in range(n_slides)]
+    return PostDraft(
+        voice="authoritative",
+        linkedin=f"Meet {b.name}.\n\n{about}\n\nLearn more at {b.url}" + (f"\n\n{tag}" if tag else ""),
+        instagram_caption=f"Meet {b.name} ✨\n\n{about[:600]}\n\nVisit {b.domain} to learn more.",
+        hashtags=hashtags, poster_headline=fact.headline[:80], poster_kicker="About us",
+        poster_stat="", slides=slides,
+    )
+
+
 def render_markdown(result: RolloutResult, pack: TaskPack, posters: dict[str, list[str]] | None = None) -> str:
     posters = posters or {}
     lines = [f"# {result.brand} — LinkedIn & Instagram posts", "",
              f"Source site: {pack.url} · Industry playbook: `{result.industry}` · "
-             f"Generated {date.today().isoformat()} · {len(result.verified)} verified post(s)", ""]
+             f"Generated {date.today().isoformat()} · {sum(not c.fallback for c in result.verified)} verified post(s)"
+             + (f" + {sum(c.fallback for c in result.verified)} fallback post(s)" if any(c.fallback for c in result.verified) else ""), ""]
     if not result.verified:
         lines += ["No post passed verification, so nothing is published. "
                   "See trajectory.md for the reasons each candidate was dropped.", ""]
@@ -423,7 +503,9 @@ def render_markdown(result: RolloutResult, pack: TaskPack, posters: dict[str, li
         for i, sl in enumerate(p.slides, 2):
             lines.append(f"{i}. **{sl.title}**")
             lines += [f"   - {b}" for b in sl.bullets]
-        if card.notes:
+        if card.fallback:
+            lines += ["", "> **Not fully verified.** " + "; ".join(card.notes)]
+        elif card.notes:
             lines += ["", "_Style notes from the reviewer (no factual issues):_ " + "; ".join(card.notes)]
         lines += ["", "**Sources**", ""]
         for e in card.sources:

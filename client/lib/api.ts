@@ -47,6 +47,9 @@ export interface SlideItem {
 export interface PostCard {
   id: string;
   status: "verified" | "rejected";
+  /** Delivered although not every check passed, so a run never ends empty. Review before posting. */
+  fallback?: boolean;
+  notes?: string[];
   fact: {
     headline: string;
     category?: string;

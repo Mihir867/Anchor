@@ -154,7 +154,12 @@ export function RunResultView({ result, onClose, fresh }: RunResultViewProps) {
                       </div>
                       <div className="text-[14px] font-medium leading-snug mt-0.5 line-clamp-2">{c.fact.headline}</div>
                     </div>
-                    {c.status === "verified" ? (
+                    {c.fallback ? (
+                      <span className="text-[10px] font-medium text-amber-600 uppercase tracking-wide mt-0.5 whitespace-nowrap"
+                            title="Not every claim could be verified. Review before publishing.">
+                        Needs review
+                      </span>
+                    ) : c.status === "verified" ? (
                       <span className="text-ok mt-0.5" title="Backed by sources">
                         <CheckIcon className="w-4 h-4" />
                       </span>

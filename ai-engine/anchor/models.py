@@ -124,6 +124,9 @@ class Card(BaseModel):
     attempts: int = 0
     problems: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)  # style remarks left after repairs (not factual)
+    # True when no candidate passed every check and this post was delivered anyway so a run never
+    # ends empty (generate.ensure_post). Its `problems` say what was not confirmed.
+    fallback: bool = False
     poster_path: Optional[str] = None
     slide_paths: list[str] = Field(default_factory=list)
     pdf_path: Optional[str] = None
