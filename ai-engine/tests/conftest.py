@@ -16,6 +16,15 @@ E1 = ("Acme cut deployment time by 40% for Globex, the company said on Tuesday. 
       "Globex now ships updates to 12,000 stores from a single pipeline.")
 
 
+@pytest.fixture(autouse=True)
+def _no_real_services(monkeypatch):
+    """.env may hold real DATABASE_URL / Cloudinary credentials (config loads it at import). No
+    test may write to them; test_storage opts in explicitly via TEST_DATABASE_URL."""
+    for name in ("DATABASE_URL", "CLOUDINARY_URL", "CLOUDINARY_CLOUD_NAME", "CLOUDINARY_API_KEY",
+                 "CLOUDINARY_API_SECRET"):
+        monkeypatch.delenv(name, raising=False)
+
+
 def pytest_configure(config):
     config.addinivalue_line("markers", "browser: drives a real Chromium against a local test site (slow)")
 
@@ -44,19 +53,19 @@ def pack():
 
 LINKEDIN = (
     "Globex now ships updates to 12,000 stores from one pipeline.\n\n"
-    "Acme says it cut Globex's deployment time by 40%. That is the difference between a release "
+    "At Acme, we cut Globex's deployment time by 40%. That is the difference between a release "
     "train that waits for a maintenance window and one that runs whenever the code is ready.\n\n"
     "The interesting part is not the tooling. It is that a retailer with that many locations "
     "treats a deploy as a non-event.\n\n"
     "If you run releases across many sites, what still forces you to batch them?"
 )
-CAPTION = ("One pipeline. 12,000 stores. Acme helped Globex cut deployment time by 40%, so updates "
+CAPTION = ("One pipeline. 12,000 stores. We helped Globex cut deployment time by 40% at Acme, so updates "
            "reach every location without a maintenance window.")
 SLIDES = [{"title": "What changed at Globex", "bullets": ["Deployment time cut by 40%", "One pipeline for 12,000 stores"]},
-          {"title": "Why it matters", "bullets": ["Releases no longer wait for a window", "Acme says the change came with the pipeline"]}]
+          {"title": "Why it matters", "bullets": ["Releases no longer wait for a window", "The change came with our pipeline"]}]
 LINKEDIN_E2 = (
     "Release notes are only useful if the people who need them actually see them.\n\n"
-    "Acme integrates with Slack and GitHub so release notes reach every team, without someone copying "
+    "At Acme, we integrate with Slack and GitHub so release notes reach every team, without someone copying "
     "changelogs between tools after each deploy.\n\n"
     "That matters most for teams whose support and sales staff learn about changes after customers do, "
     "and for anyone who has had to answer a question about a release they never heard about.\n\n"
@@ -85,11 +94,15 @@ def fake_complete(self, system, user, *, temperature=0.4, json_mode=False, histo
     if "choose which of" in user or "```choice" in user:
         ids = re.findall(r"candidates/([A-Z]+)\.md", user)
         return f"<why>Only faithful candidate.</why>\n```choice\n{ids[0] if ids else 'A'}\n```"
+    if "You review a brand's social posts" in system:  # score.py judge: middling, equal for all
+        ids = re.findall(r'"post_id": "([^"]+)"', user)
+        return json.dumps({"posts": [{"post_id": i, "specificity": 3, "new_to_followers": 3, "hook": 3,
+                                      "brand_voice": 3, "channel_fit": 3} for i in ids]})
     if "independent fact-checker" in system:
         return json.dumps({"unsupported_claims": [], "voice_problems": []})
     if "STAGE 1 OF 2" in user:
         return json.dumps({"facts": [{
-            "headline": "Acme cut Globex deployment time by 40%", "category": "Customer Outcome",
+            "headline": "Acme cut Globex deployment time by 40%", "category": "Customer story",
             "evidence_ids": ["E1"], "quote": "Acme cut deployment time by 40% for Globex, the company said on Tuesday.",
             "metrics": ["40%"], "named_entities": ["Globex"], "why_it_matters": "Faster releases."}, {
             "headline": "Acme integrates with Slack and GitHub", "category": "Integration",

@@ -28,6 +28,8 @@ from pathlib import Path
 
 import httpx
 
+from pydantic import BaseModel, Field
+
 from .config import Settings
 from .models import Competitor, MarketIntel, SearchKeyword
 
@@ -113,8 +115,49 @@ def post(path: str, body: dict, cfg: Settings) -> list[dict]:
     return items
 
 
-def _geo(cfg: Settings) -> dict:
-    return {"location_code": cfg.dataforseo_location_code, "language_code": cfg.dataforseo_language_code}
+# ---- geography -------------------------------------------------------------------------
+
+# DataForSEO location codes for the markets brands most often target.
+LOCATIONS = {
+    "us": 2840, "in": 2356, "gb": 2826, "uk": 2826, "no": 2578, "de": 2276, "fr": 2250, "es": 2724,
+    "it": 2380, "nl": 2528, "se": 2752, "dk": 2208, "fi": 2246, "au": 2036, "ca": 2124, "jp": 2392,
+    "br": 2076, "mx": 2484, "sg": 2702, "ae": 2784, "ie": 2372, "nz": 2554, "za": 2710, "kr": 2410,
+    "be": 2056, "ch": 2756, "at": 2040, "pt": 2620, "pl": 2616, "id": 2360, "ph": 2608, "my": 2458,
+}
+# Country-code TLDs that are used as generic tech TLDs and say nothing about the market.
+_GENERIC_CC = {"ai", "io", "co", "me", "tv", "dev", "app", "cc", "ly", "fm", "gg", "so", "sh", "to", "xyz"}
+_LANG_ALIASES = {"nb": "no", "nn": "no", "iw": "he", "in": "id"}
+
+
+def geo_for(url: str, html_lang: str, cfg: Settings) -> tuple[int, str, str]:
+    """(location_code, language_code, how) for the brand's own market.
+
+    An explicit DATAFORSEO_LOCATION_CODE wins. Otherwise: a country path segment (/in/, /en-gb/),
+    the <html lang> region (en-GB), then the country-code TLD (.no, .co.uk); default US."""
+    from urllib.parse import urlparse
+
+    lang_tag = (html_lang or "").strip().lower().replace("_", "-")
+    lang = _LANG_ALIASES.get(lang_tag.split("-")[0], lang_tag.split("-")[0]) if lang_tag else ""
+    if cfg.dataforseo_language_code:
+        lang = cfg.dataforseo_language_code
+    lang = lang if re.fullmatch(r"[a-z]{2}", lang or "") else "en"
+    if cfg.dataforseo_location_code:
+        return cfg.dataforseo_location_code, lang, "configured"
+    u = urlparse(url)
+    first = (u.path.strip("/").split("/") or [""])[0].lower()
+    m = re.fullmatch(r"(?:[a-z]{2}-)?([a-z]{2})", first)
+    if m and m.group(1) in LOCATIONS and first not in ("en", "es", "de", "fr", "it", "pt", "nl", "ja"):
+        return LOCATIONS[m.group(1)], lang, f"url path /{first}/"
+    if "-" in lang_tag and lang_tag.split("-")[1] in LOCATIONS:
+        return LOCATIONS[lang_tag.split("-")[1]], lang, f"html lang {lang_tag}"
+    tld = u.netloc.lower().split(":")[0].rsplit(".", 1)[-1]
+    if tld in LOCATIONS and tld not in _GENERIC_CC:
+        return LOCATIONS[tld], lang, f".{tld} domain"
+    return 2840, lang, "default (US)"
+
+
+def _geo(loc: int, lang: str) -> dict:
+    return {"location_code": loc, "language_code": lang}
 
 
 def _bare(domain: str) -> str:
@@ -128,27 +171,76 @@ def _num(v) -> float:
         return 0.0
 
 
-def competitors(domain: str, cfg: Settings) -> list[Competitor]:
-    items = post("dataforseo_labs/google/competitors_domain/live",
-                 {"target": domain, **_geo(cfg), "limit": 30, "exclude_top_domains": True,
-                  "order_by": ["intersections,desc"]}, cfg)
-    me = _bare(domain)
-    out: list[Competitor] = []
-    for it in items:
-        d = _bare(it.get("domain", ""))
-        if not d or d == me or d.endswith("." + me) or me.endswith("." + d) or _NOT_COMPETITORS.search(d):
-            continue
-        organic = ((it.get("full_domain_metrics") or {}).get("organic") or {})
-        out.append(Competitor(domain=d, shared_keywords=int(_num(it.get("intersections"))),
-                              avg_position=round(_num(it.get("avg_position")), 1),
-                              organic_traffic=int(_num(organic.get("etv")))))
-        if len(out) >= cfg.dataforseo_max_competitors:
-            break
+# ---- filters ---------------------------------------------------------------------------
+
+def _label(domain: str) -> str:
+    """Second-level label: 'inhabitr' for inhabitr.ai, 'thesavoylondon' for www.thesavoylondon.com."""
+    parts = _bare(domain).split(".")
+    if len(parts) >= 3 and parts[-2] in ("co", "com", "org", "net", "ac", "gov"):
+        return parts[-3]
+    return parts[-2] if len(parts) >= 2 else parts[0]
+
+
+def _close(a: str, b: str, ratio: float = 0.8) -> bool:
+    from difflib import SequenceMatcher
+
+    return bool(a and b) and (a == b or (min(len(a), len(b)) >= 4 and (a in b or b in a))
+                              or SequenceMatcher(None, a, b).ratio() >= ratio)
+
+
+def brand_terms(brand: str, domain: str) -> list[str]:
+    core = re.sub(r"\W+", "", (brand or "").lower())
+    out = [t for t in {core, _label(domain).replace("-", "")} if len(t) >= 3]
+    out += [w for w in re.findall(r"[a-z0-9]{4,}", (brand or "").lower()) if w not in out]
     return out
 
 
+def is_branded(keyword: str, terms: list[str]) -> bool:
+    """The brand's name, a typo of it ("inhabitor" for Inhabitr) or the name glued to a word."""
+    kw = keyword.lower()
+    squashed = re.sub(r"\W+", "", kw)
+    tokens = re.findall(r"[a-z0-9]+", kw)
+    for t in terms:
+        if t in squashed or any(_close(tok, t, 0.8) for tok in tokens if len(tok) >= 4):
+            return True
+    return False
+
+
+def lookalike(domain: str, brand_domain: str, terms: list[str]) -> bool:
+    """The brand's own other domains (inhabitr.com for inhabitr.ai) and name-alikes
+    (inhabit.com, inhabit-interiors.com) share branded searches, not the market."""
+    lab = _label(domain)
+    parts = [lab] + lab.split("-")
+    return any(_close(part, t, 0.75) for part in parts for t in terms + [_label(brand_domain)] if len(part) >= 4)
+
+
+_STOPWORDS = {"the", "and", "for", "with", "how", "what", "best", "near", "free", "top", "vs", "you", "your",
+              "are", "can", "does", "from", "that", "this", "online", "near", "me", "is", "to", "of", "in",
+              "a", "an", "on", "my", "do", "why", "who", "which", "when"}
+
+
+def content_words(text: str) -> set[str]:
+    return {w for w in re.findall(r"[a-z0-9][a-z0-9+#-]{2,}", (text or "").lower()) if w not in _STOPWORDS}
+
+
+def relevant(keyword: str, vocab: set[str], share: float = 0.5) -> bool:
+    """At least `share` of the keyword's content words appear on the brand's own pages: "hotel
+    furniture cost" is relevant for a hotel-furniture site, "google headquarters" is not."""
+    words = content_words(keyword)
+    if not words or not vocab:
+        return not vocab  # no vocabulary to judge by: keep
+    hits = sum(1 for w in words if w in vocab or w.rstrip("s") in vocab or (w + "s") in vocab)
+    return hits / len(words) >= share
+
+
+def _keep(k: "SearchKeyword", terms: list[str], vocab: set[str], share: float) -> bool:
+    return (k.intent or "") != "navigational" and not is_branded(k.keyword, terms) and relevant(k.keyword, vocab, share)
+
+
+# ---- DataForSEO Labs calls --------------------------------------------------------------
+
 def _keyword(it: dict, *, page_key: str = "ranked_serp_element", domain: str = "") -> SearchKeyword | None:
-    kd = it.get("keyword_data") or {}
+    kd = it.get("keyword_data") or it  # ranked_keywords nests it; keywords_for_site does not
     kw = (kd.get("keyword") or "").strip()
     if not kw:
         return None
@@ -161,23 +253,69 @@ def _keyword(it: dict, *, page_key: str = "ranked_serp_element", domain: str = "
                          intent=intent, competitor=domain or None)
 
 
-def brand_keywords(domain: str, cfg: Settings) -> list[SearchKeyword]:
+def ranked_keywords(domain: str, geo: dict, cfg: Settings) -> list[SearchKeyword]:
     items = post("dataforseo_labs/google/ranked_keywords/live",
-                 {"target": domain, **_geo(cfg), "limit": 60, "load_rank_absolute": False,
+                 {"target": domain, **geo, "limit": 100, "load_rank_absolute": False,
                   "order_by": ["keyword_data.keyword_info.search_volume,desc"]}, cfg)
-    return _dedupe([k for k in (_keyword(i) for i in items) if k], cfg.dataforseo_max_keywords)
+    return [k for k in (_keyword(i) for i in items) if k]
 
 
-def content_gaps(domain: str, rivals: list[Competitor], cfg: Settings) -> list[SearchKeyword]:
-    """Keywords each top competitor ranks for (top 20) and the brand does not rank for at all."""
+def site_keywords(domain: str, geo: dict, cfg: Settings) -> list[SearchKeyword]:
+    """Keywords relevant to the site's content even where it does not rank yet (small sites)."""
+    items = post("dataforseo_labs/google/keywords_for_site/live",
+                 {"target": domain, **geo, "limit": 100, "include_serp_info": False,
+                  "order_by": ["keyword_info.search_volume,desc"]}, cfg)
+    return [k for k in (_keyword(i) for i in items) if k]
+
+
+def serp_competitors(keywords: list[str], brand_domain: str, terms: list[str], geo: dict,
+                     cfg: Settings) -> list[Competitor]:
+    """Domains that rank for the brand's NON-branded keywords: the real market competitors."""
+    if not keywords:
+        return []
+    items = post("dataforseo_labs/google/serp_competitors/live",
+                 {"keywords": keywords[:20], **geo, "limit": 30, "item_types": ["organic"]}, cfg)
+    return _competitors(items, brand_domain, terms, cfg, shared_key="keywords_count")
+
+
+def domain_competitors(domain: str, terms: list[str], geo: dict, cfg: Settings) -> list[Competitor]:
+    items = post("dataforseo_labs/google/competitors_domain/live",
+                 {"target": domain, **geo, "limit": 30, "exclude_top_domains": True,
+                  "order_by": ["intersections,desc"]}, cfg)
+    return _competitors(items, domain, terms, cfg, shared_key="intersections")
+
+
+def _competitors(items: list[dict], brand_domain: str, terms: list[str], cfg: Settings,
+                 shared_key: str) -> list[Competitor]:
+    me = _bare(brand_domain)
+    out: list[Competitor] = []
+    for it in items:
+        d = _bare(it.get("domain", ""))
+        if (not d or d == me or d.endswith("." + me) or me.endswith("." + d) or _NOT_COMPETITORS.search(d)
+                or lookalike(d, me, terms)):
+            continue
+        organic = ((it.get("full_domain_metrics") or {}).get("organic") or {})
+        out.append(Competitor(domain=d, shared_keywords=int(_num(it.get(shared_key))),
+                              avg_position=round(_num(it.get("avg_position")), 1),
+                              organic_traffic=int(_num(organic.get("etv") or it.get("etv")))))
+        if len(out) >= cfg.dataforseo_max_competitors:
+            break
+    return out
+
+
+def content_gaps(domain: str, rivals: list[Competitor], terms: list[str], vocab: set[str], geo: dict,
+                 cfg: Settings) -> list[SearchKeyword]:
+    """Keywords top competitors rank for (top 20) and the brand does not, kept only when they are
+    about the brand's own business (its vocabulary) and are not some company's name."""
     gaps: list[SearchKeyword] = []
     for rival in rivals[:2]:
         items = post("dataforseo_labs/google/domain_intersection/live",
-                     {"target1": rival.domain, "target2": domain, "intersections": False, **_geo(cfg),
-                      "limit": 30, "filters": [["first_domain_serp_element.rank_group", "<=", 20]],
+                     {"target1": rival.domain, "target2": domain, "intersections": False, **geo,
+                      "limit": 50, "filters": [["first_domain_serp_element.rank_group", "<=", 20]],
                       "order_by": ["keyword_data.keyword_info.search_volume,desc"]}, cfg)
-        gaps += [k for k in (_keyword(i, page_key="first_domain_serp_element", domain=rival.domain)
-                             for i in items) if k]
+        rival_terms = terms + brand_terms("", rival.domain)
+        gaps += [k for k in (_keyword(i, page_key="first_domain_serp_element", domain=rival.domain) for i in items)
+                 if k and _keep(k, rival_terms, vocab, 0.5)]
     return _dedupe(sorted(gaps, key=lambda k: k.search_volume, reverse=True), cfg.dataforseo_max_keywords)
 
 
@@ -191,33 +329,112 @@ def _dedupe(kws: list[SearchKeyword], n: int) -> list[SearchKeyword]:
     return out[:n]
 
 
-def market_intel(domain: str, brand: str, cfg: Settings) -> MarketIntel | None:
-    """Competitors, the audience's searches and competitor content gaps; None if unavailable."""
+_QUESTION = re.compile(r"^(how|what|why|when|which|who|can|does|do|is|are|should|best|vs\b)|\bvs\b|\?$", re.I)
+
+
+def questions(intel: MarketIntel | None) -> list[SearchKeyword]:
+    """Searches phrased as questions: the raw material for Answer posts."""
+    if not intel:
+        return []
+    return [k for k in intel.brand_keywords + intel.gap_keywords if _QUESTION.search(k.keyword)]
+
+
+class _Relevant(BaseModel):
+    competitors: list[str] = Field(default_factory=list)
+    keywords: list[str] = Field(default_factory=list)
+
+
+def screen(intel: MarketIntel, brand: str, about: str, cfg: Settings) -> MarketIntel:
+    """One small model call keeps only what belongs to the brand's market. Word filters cannot
+    tell, on a large site, that "have been pwned" or "sheraton room service menu" are not about a
+    customer-service platform, or that investopedia.com is not a competitor. On failure the
+    deterministically filtered intel is returned unchanged."""
+    from .llm import LLM, LLMError
+
+    kws = list(dict.fromkeys(k.keyword for k in intel.brand_keywords + intel.gap_keywords))
+    if not (intel.competitors or kws):
+        return intel
+    try:
+        pick = LLM(cfg.critic_model, cfg=cfg).json(
+            "You screen search-marketing data for a social media team. Keep only what is about the "
+            "brand's own market. Be strict.",
+            f"Brand: {brand}\nWhat it does (its own words): {about[:900]}\n\n"
+            "COMPETITORS (domains): " + json.dumps([c.domain for c in intel.competitors]) + "\n"
+            "Keep a domain only if it sells products or services that compete with the brand's. Drop "
+            "publishers, encyclopedias, directories and companies in other markets.\n\n"
+            "SEARCHES: " + json.dumps(kws) + "\n"
+            "Keep a search only if the brand's customers would search it about the brand's category of "
+            "products or the problems they solve, and the brand could credibly post about it. Drop "
+            "searches about other companies or their products (e.g. a competitor's or an AI model's "
+            "name), unrelated topics, word definitions and navigational queries.\n\n"
+            "Return the kept items copied exactly.", _Relevant, temperature=0.0)
+    except LLMError as exc:
+        log.warning("[market] relevance screen unavailable, keeping word-filtered data: %s", exc)
+        return intel
+    keep_c = {_bare(c) for c in pick.competitors}
+    keep_k = {k.strip().lower() for k in pick.keywords}
+    return intel.model_copy(update={
+        "competitors": [c for c in intel.competitors if c.domain in keep_c],
+        "brand_keywords": [k for k in intel.brand_keywords if k.keyword.lower() in keep_k],
+        "gap_keywords": [k for k in intel.gap_keywords if k.keyword.lower() in keep_k],
+    })
+
+
+def market_intel(domain: str, brand: str, cfg: Settings, *, url: str = "", html_lang: str = "",
+                 vocab: set[str] | None = None, about: str = "") -> tuple[MarketIntel | None, str]:
+    """(intel, note). Competitors and searches come from NON-branded keywords only, filtered for
+    relevance to the brand's own pages, so the context is about the market, not the name."""
     if not enabled(cfg):
-        return None
+        return None, "off: DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD are not set"
     domain = _bare(domain)
-    rivals = competitors(domain, cfg)
-    keywords = brand_keywords(domain, cfg)
-    gaps = content_gaps(domain, rivals, cfg) if rivals else []
-    if not (rivals or keywords or gaps):
-        log.info("DataForSEO returned no market data for %s", domain)
-        return None
-    # Brand-name searches tell us nothing about the market; keep them out of "demand".
-    core = re.sub(r"\W+", "", brand.lower())
-    keywords = [k for k in keywords if not core or core not in re.sub(r"\W+", "", k.keyword.lower())] or keywords
-    intel = MarketIntel(location_code=cfg.dataforseo_location_code, language_code=cfg.dataforseo_language_code,
-                        competitors=rivals, brand_keywords=keywords, gap_keywords=gaps)
-    log.info("[market] %s: %d competitors (%s), %d brand keywords, %d gap keywords", domain, len(rivals),
-             ", ".join(c.domain for c in rivals[:5]), len(keywords), len(gaps))
-    return intel
+    vocab = vocab or set()
+    terms = brand_terms(brand, domain)
+    loc, lang, how = geo_for(url or f"https://{domain}/", html_lang, cfg)
+    geo = _geo(loc, lang)
+    log.info("[market] %s: location %s, language %s (%s)", domain, loc, lang, how)
+
+    ranked = ranked_keywords(domain, geo, cfg)
+    demand = [k for k in ranked if _keep(k, terms, vocab, 0.34)]
+    source = "ranked"
+    if len(demand) < 3:  # small or new site: it ranks mostly for its own name
+        extra = [k for k in site_keywords(domain, geo, cfg) if _keep(k, terms, vocab, 0.5)]
+        demand += [k for k in extra if k.keyword not in {d.keyword for d in demand}]
+        source = "ranked + site-relevant"
+    demand = _dedupe(sorted(demand, key=lambda k: k.search_volume, reverse=True), cfg.dataforseo_max_keywords)
+    rivals = serp_competitors([k.keyword for k in demand], domain, terms, geo, cfg)
+    if not rivals and len(ranked) - len(demand) < len(ranked) * 0.8:
+        # Fallback when SERP competitors gave nothing and the ranking is not mostly branded.
+        rivals = domain_competitors(domain, terms, geo, cfg)
+    gaps = content_gaps(domain, rivals, terms, vocab, geo, cfg) if rivals else []
+    if _blocked:
+        return None, f"refused: DataForSEO {_blocked[0]}"
+    if not (rivals or demand or gaps):
+        branded = len(ranked) - len([k for k in ranked if not is_branded(k.keyword, terms)])
+        return None, (f"empty: no usable market data for {domain} in location {loc} ({how}); "
+                      f"{len(ranked)} ranked keyword(s), {branded} of them branded")
+    intel = MarketIntel(location_code=loc, language_code=lang, competitors=rivals, brand_keywords=demand,
+                        gap_keywords=gaps)
+    if about:
+        before = len(intel.competitors) + len(intel.brand_keywords) + len(intel.gap_keywords)
+        intel = screen(intel, brand, about, cfg)
+        rivals, demand, gaps = intel.competitors, intel.brand_keywords, intel.gap_keywords
+        log.info("[market] relevance screen kept %d of %d items", len(rivals) + len(demand) + len(gaps), before)
+        if not (rivals or demand or gaps):
+            return None, f"empty: nothing in the search data for {domain} was about its market (location {loc})"
+    note = (f"used: {len(rivals)} competitor(s), {len(demand)} audience search(es) ({source}), "
+            f"{len(gaps)} content gap(s); location {loc} ({how}), language {lang}")
+    log.info("[market] %s: %s; competitors %s", domain, note, ", ".join(c.domain for c in rivals[:5]))
+    return intel, note
 
 
-def news_hits(query: str, cfg: Settings, n: int = 10) -> list[dict]:
+def news_hits(query: str, cfg: Settings, n: int = 10, geo: tuple[int, str] | None = None) -> list[dict]:
     """Google News results as research.py hits: {title, url, date}."""
     if not enabled(cfg):
         return []
     items = post("serp/google/news/live/advanced",
-                 {"keyword": query, **_geo(cfg), "depth": max(10, n)}, cfg)
+                 {"keyword": query, **_geo(*(geo or (cfg.dataforseo_location_code or 2840,
+                                                     cfg.dataforseo_language_code or "en"))),
+                  "depth": max(10, n)}, cfg)
     out = []
     for it in items:
         if it.get("type") != "news_search" or not it.get("url"):
@@ -245,6 +462,10 @@ def render(intel: MarketIntel | None, brand: str) -> str:
         lines += [f"## What the audience searches for (and {brand} ranks on)", ""] + [
             f"- \"{k.keyword}\" ({k.search_volume:,}/mo" + (f", #{k.position}" if k.position else "")
             + (f", {k.intent}" if k.intent else "") + ")" for k in intel.brand_keywords] + [""]
+    qs = questions(intel)
+    if qs:
+        lines += ["## Questions the audience searches for (raw material for Answer posts)", ""] + [
+            f"- \"{k.keyword}\" ({k.search_volume:,}/mo)" for k in qs[:10]] + [""]
     if intel.gap_keywords:
         lines += [f"## Content gaps: competitors rank, {brand} does not", ""] + [
             f"- \"{k.keyword}\" ({k.search_volume:,}/mo; {k.competitor}"
@@ -276,5 +497,4 @@ def keyword_terms(intel: MarketIntel | None) -> dict[str, float]:
     return weights
 
 
-_STOP = {"the", "and", "for", "with", "how", "what", "best", "near", "free", "top", "vs", "you", "your",
-         "are", "can", "does", "from", "that", "this", "online", "2024", "2025", "2026"}
+_STOP = _STOPWORDS | {"2024", "2025", "2026", "2027"}

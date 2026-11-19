@@ -150,11 +150,24 @@ quota is spent, it runs one rollout instead and says so in `report.md`.
 Optional; set `DATAFORSEO_LOGIN` and `DATAFORSEO_PASSWORD` (API access credentials) in `.env`.
 During `prepare`, before any rollout or Harness² step, `market.py` pulls:
 
-- **Competitors**: domains competing for the same organic keywords (Labs `competitors_domain`,
-  with marketplaces, social networks and encyclopedias filtered out).
-- **Audience searches**: the brand's highest-volume ranked keywords, excluding brand-name searches.
-- **Content gaps**: keywords the top 2 competitors rank top-20 for and the brand doesn't rank for at all.
+- **Audience searches**: the brand's ranked keywords with brand-name searches, typos of the
+  name ("inhabitor" for Inhabitr) and navigational searches removed, kept only when they relate
+  to the brand's own pages. Small sites that rank mostly for their name get site-relevant
+  keywords (Labs `keywords_for_site`) instead.
+- **Competitors**: domains ranking for those NON-branded searches (Labs `serp_competitors`).
+  The brand's other domains (inhabitr.com for inhabitr.ai), name-alikes (inhabit.com) and
+  marketplaces/social/encyclopedias are filtered out.
+- **Content gaps**: keywords the top 2 competitors rank top-20 for and the brand doesn't,
+  kept only when they are about the brand's business (not "google headquarters") and are not a
+  competitor's own name.
+- **Audience questions**: searches phrased as questions, offered as material for Answer posts.
 - **Google News** results for the industry skill's `news_queries`, alongside Bing.
+
+The market (location and language) follows the site: a country path (`/in/`), the `<html lang>`
+region (`en-GB`), then the country TLD (`.no`; tech TLDs like `.ai`/`.io` are ignored), else US.
+Set `DATAFORSEO_LOCATION_CODE` / `DATAFORSEO_LANGUAGE_CODE` to force one. What happened is
+always reported: `report.md` and `result.json` (`market_status`) say `used`, `off` (no
+credentials), `empty` (no usable data, with why) or `refused` (account/credit error).
 
 All of this lands in the frozen `TaskPack` (`pack.market`) and in `pack/source/market.md`, so every
 rollout, the Harness² improver and the blind selector see identical context. It is **never
@@ -168,7 +181,27 @@ evidence**:
 Responses are cached for `DATAFORSEO_CACHE_DAYS` (7), so refines and reruns don't pay twice. Spend
 is reported in `report.md` and `result.json`. A typical run makes 4 Labs calls plus up to 3 News
 calls, which costs a few cents. Any API failure degrades to "no market context" and never fails a
-run. `DATAFORSEO_LOCATION_CODE` (2840 = US) and `DATAFORSEO_LANGUAGE_CODE` (`en`) choose the market.
+run.
+
+## Posts for existing brands
+
+Posts go out on the brand's own channels to people who already follow it, so:
+
+- They are written **as the brand** ("we", "our"), naming it at least once; third parties keep
+  their attribution. "Acme says..." about the brand itself fails `verify.check_post`.
+- **No introductions**: "Meet Acme", "Introducing Acme", "Acme is a platform that..." fail the
+  post (a named NEW product can still be introduced).
+- Each industry skill defines **post types** (`post_types` in its frontmatter: Customer story,
+  Feature how-to, Proof point, Answer, Dining spotlight, Planner brief...). Facts are ranked so
+  a set uses different types; the same topic never appears twice.
+- **Launches need a date**: a Release/Launch/Opening/News fact must cite an item dated within 18
+  months, so undated homepage copy is never dressed up as news.
+- **No repeats across runs**: every delivered post is recorded per brand (`anchor/history.py`,
+  in Postgres when configured) and later runs skip those topics. `ANCHOR_BRAND_HISTORY=0` turns
+  this off.
+- The crawl goes **one level deeper**: up to `ANCHOR_MAX_ARTICLE_PAGES` (4) individual blog
+  posts, case studies, changelog and press entries linked from the index pages, where dated,
+  specific stories live.
 
 ## Storage (Postgres + Cloudinary)
 
@@ -189,9 +222,16 @@ run: the posts stay on disk and `backfill` re-syncs them.
 ## Cost
 
 - **Refine once, reuse often.** `--refine` runs Harness² (4 rollouts plus improver calls, about
-  5× a normal run). When it adopts a harness and records a lesson, that harness goes into
-  `runs/library/agg/<industry>/`. Every later normal run in that industry uses the newest
-  valid one automatically, so you pay for refinement occasionally rather than on every brand.
+  5× a normal run). An edited harness is adopted only when it beats the base harness on the
+  quality score (`anchor/score.py`: an independent judge's rubric for specificity, news value
+  for existing followers, hook, brand voice and channel fit, minus deterministic penalties for
+  introductions, third-person self-reference and repeated topics) by `ANCHOR_ADOPT_MARGIN`
+  (0.25). Otherwise the base harness's posts are delivered and nothing is stored. A promoted
+  harness goes into `runs/library/agg/<industry>/` with a `PROMOTED.json`, is saved to Postgres
+  (so deploys keep it), and every later normal run in that industry uses it.
+- **Refine in the background.** `python -m anchor.h2.background --recent 5` refines saved runs
+  from their frozen packs without touching their output. With `ANCHOR_AUTO_REFINE=1` the API
+  does this after each fast job, in its own thread, so users never wait for it.
 - **Free first.** `.env` routes each role through Groq's free tier first. Paid Cerebras credits
   are used only when Groq is rate-limited, out of daily quota, or the request is too large.
 - **No paying for invisible reasoning.** Qwen runs with reasoning off and gpt-oss on `low`.

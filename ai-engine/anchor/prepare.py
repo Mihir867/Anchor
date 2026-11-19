@@ -16,7 +16,7 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from . import crawl, extract, harness, market, progress, research
+from . import crawl, extract, harness, history, market, progress, research
 from .config import Settings
 from .llm import LLM, LLMError
 from .models import BrandKit, Evidence, SkillChoice, TaskPack
@@ -41,7 +41,7 @@ def task_id_for(url: str) -> str:
     return f"{slug}-{datetime.now().strftime('%Y%m%d-%H%M%S')}"
 
 
-def classify(h: harness.Harness, text: str, ld_types: set[str], cfg: Settings) -> tuple[str, str]:
+def classify(h: harness.Harness, text: str, ld_types: set[str], cfg: Settings, url: str = "") -> tuple[str, str]:
     """Industry = the skill whose keywords/schema types best match. LLM only breaks ties."""
     industries = {n: s for n, s in h.skills.items() if s.meta.get("industry")}
     if not industries:
@@ -62,7 +62,8 @@ def classify(h: harness.Harness, text: str, ld_types: set[str], cfg: Settings) -
         menu = "\n".join(f"- {n}: {s.description}" for n, s in industries.items())
         choice = LLM(cfg.model, cfg=cfg).json(
             "You classify a business into exactly one playbook.",
-            f"Playbooks:\n{menu}\n\nBusiness homepage text (truncated):\n{text[:3500]}\n\n"
+            f"Playbooks:\n{menu}\n\nBusiness URL: {url or 'unknown'}\n"
+            f"Business homepage text (truncated):\n{text[:3500]}\n\n"
             "Pick the single best playbook name.",
             SkillChoice,
             temperature=0.0,
@@ -97,28 +98,43 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
     if industry and industry in h.skills:
         reason = "forced by caller"
     else:
-        industry, reason = classify(h, home_text, ld_types, cfg)
+        # URL words count too ("grand-hyatt-mumbai", "/hotels/") when the page itself is thin.
+        url_words = " ".join(re.split(r"[^a-z0-9]+", url.lower()))
+        industry, reason = classify(h, home_text + " " + url_words, ld_types, cfg, url)
     skill = h.skills[industry]
     log.info("[prepare] brand=%r industry=%s (%s)", name, industry, reason)
     progress.report("crawling", brand=name, industry=industry)
 
     urls = crawl.candidate_urls(home, skill.list_meta("crawl_paths"), cfg.max_pages)
     pages = asyncio.run(crawl.crawl_pages(urls, cfg.max_pages, budget=cfg.subpage_budget))
+    deep = crawl.article_links(pages, home.url, {home.url, *urls}, cfg.max_article_pages)
+    if deep:
+        log.info("[prepare] reading %d article page(s) linked from index pages", len(deep))
+        progress.report("crawling", articles=len(deep))
+        pages += asyncio.run(crawl.crawl_pages(deep, cfg.max_article_pages, budget=cfg.article_budget))
     site_items, extras = extract.site_evidence(home.home, pages)
     domain = urlparse(home.url).netloc.removeprefix("www.")
     progress.report("researching", pages=1 + len(pages), site_evidence=len(site_items))
     script = dominant_script(" ".join(d["text"] for d in site_items) or home_text)
+    lang_tag = str(home.tokens.get("lang") or "")
+    language = (lang_tag.split("-")[0].lower() or "en") if re.fullmatch(r"[A-Za-z]{2,3}(-[A-Za-z0-9]+)*", lang_tag) else "en"
+    geo = market.geo_for(home.url, lang_tag, cfg)[:2] if market.enabled(cfg) else None
     log.info("[prepare] %d site evidence items from %d pages; searching news for %r", len(site_items),
              1 + len(pages), name)
     news_items = research.news_evidence(name, domain, skill.list_meta("news_queries"), cfg.max_articles,
-                                        script, cfg)
-    intel = None
+                                        script, cfg, geo=geo)
+    intel, market_note = None, "off: DATAFORSEO_LOGIN/DATAFORSEO_PASSWORD are not set"
     if market.enabled(cfg):
         progress.report("researching", step="competitors")
         log.info("[prepare] fetching DataForSEO market context for %s", domain)
+        vocab = market.content_words(home_text + " " + " ".join(d["text"] for d in site_items))
         try:
-            intel = market.market_intel(domain, name, cfg)
+            about = " ".join(x for x in (home.tokens.get("title", ""), home.tokens.get("description", ""),
+                                         home.tokens.get("h1", "")) if x)
+            intel, market_note = market.market_intel(domain, name, cfg, url=home.url, html_lang=lang_tag,
+                                                     vocab=vocab, about=about)
         except Exception as exc:  # market context is an enhancement; never fail a run over it
+            market_note = f"failed: {type(exc).__name__}: {exc}"[:300]
             log.warning("[prepare] DataForSEO market context failed: %s", exc)
         if intel:
             progress.report("researching", competitors=[c.domain for c in intel.competitors],
@@ -152,7 +168,10 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
         task_id=task_id, url=home.url, created_at=datetime.now(timezone.utc).isoformat(),
         industry=industry, industry_reason=reason, max_posts=max_posts, brand=brand, script=script,
         evidence=evidence, pages_crawled=[home.url] + [p.url for p in pages], market=intel,
+        market_note=market_note, language=language,
+        already_posted=[p_["headline"] for p_ in history.load(cfg, domain)],
     )
+    log.info("[prepare] market context %s", market_note)
     write_pack(pack, pack_dir, extras.get("customers", []))
     progress.report("mining", evidence=len(evidence), news=sum(e.kind == "article" for e in evidence))
     log.info("[prepare] %d evidence items (%d site, %d news) from %d pages",

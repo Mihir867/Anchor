@@ -7,7 +7,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from . import generate, market, progress, render
+from . import generate, history, market, progress, render
 from .config import Settings, settings
 from . import harness as harness_mod
 from .llm import LLM, reset_usage, usage_snapshot
@@ -53,13 +53,19 @@ def run(url: str, *, mode: str = "refine", k: int = 1, max_posts: int = 3, indus
 
 
 def learned_harness(cfg: Settings, industry: str) -> Path:
-    """Harness²'s harnessing-level memory, reused cheaply: the harness most recently adopted for
-    this industry (runs/library/agg/<industry>/harnesses/*/harness), if it is still valid for the
-    executor; otherwise the base harness. One refine run then benefits every later fast run."""
+    """The harness Harness² most recently PROMOTED for this industry (it beat the base harness
+    on the quality score; see h2.refine.GatedLibrary), if still valid; otherwise the base harness.
+    Library entries without a PROMOTED.json (stored before scoring existed) are never used."""
     root = cfg.library_dir / "agg" / industry / "harnesses"
-    entries = sorted((p for p in root.glob("*/harness") if p.is_dir()),
-                     key=lambda p: p.stat().st_mtime, reverse=True) if root.is_dir() else []
-    for cand in entries:
+    promoted = []
+    for entry in (root.iterdir() if root.is_dir() else []):
+        rec = entry / "PROMOTED.json"
+        if rec.is_file() and (entry / "harness").is_dir():
+            try:
+                promoted.append((json.loads(rec.read_text(encoding="utf-8")).get("promoted_at", ""), entry / "harness"))
+            except ValueError:
+                continue
+    for _, cand in sorted(promoted, reverse=True):
         if not harness_mod.problems(cand) and industry in harness_mod.load(cand).skills:
             return cand
     return cfg.harness_dir
@@ -117,9 +123,10 @@ def finalize(pack, run_dir: Path, chosen: Path, harness_used: Path, cfg: Setting
         f"- posts verified: {verified_n} / {len(result.cards)}"
         + (f" (+{fallback_n} fallback post delivered so the run is not empty)" if fallback_n else ""), "",
     ]
+    report += ["## Market context (DataForSEO)", "", f"- status: {pack.market_note or 'not recorded'}"]
     if pack.market:
         m = pack.market
-        report += ["## Market context (DataForSEO)", "",
+        report += [
                    "Steered which facts were picked and how posts were angled; never used as evidence.", "",
                    f"- competitors: {', '.join(c.domain for c in m.competitors) or 'none found'}",
                    f"- audience searches: {', '.join(k.keyword for k in m.brand_keywords[:10]) or 'none'}",
@@ -128,10 +135,8 @@ def finalize(pack, run_dir: Path, chosen: Path, harness_used: Path, cfg: Setting
         if spend["calls"]:
             report += [f"- DataForSEO: {spend['calls']} live call(s), ${spend['usd']:.4f} (cached calls are free)"]
         report += [""]
-    elif market.blocked_reason():
-        report += ["## Market context (DataForSEO)", "",
-                   f"Skipped: DataForSEO refused the request ({market.blocked_reason()}). Posts were "
-                   "written without competitor context.", ""]
+    else:
+        report += ["- posts were written without competitor or search context", ""]
     if stages_note:
         report += ["## Harness²", "", stages_note, ""]
     usage = usage_snapshot()
@@ -153,10 +158,15 @@ def finalize(pack, run_dir: Path, chosen: Path, harness_used: Path, cfg: Setting
         "token_usage": usage_snapshot(),
         "competitors": [c.domain for c in pack.market.competitors] if pack.market else [],
         "dataforseo": market.cost_snapshot(),
+        "market_status": pack.market_note,
         "posts_md": str(out / "posts.md"),
         "posters": [str(out / n) for names in posters.values() for n in names if n.endswith(".png")],
         "carousels": [str(out / names[-1]) for names in posters.values()],
     }
     (run_dir / "result.json").write_text(json.dumps(summary, indent=2), encoding="utf-8")
+    try:  # so the next run for this brand picks new facts
+        history.record(cfg, pack.brand.domain, pack.task_id, result.verified)
+    except Exception as exc:
+        log.warning("[finalize] could not record post history: %s", exc)
     log.info("[finalize] %d verified posts -> %s", len(result.verified), out)
     return summary

@@ -49,7 +49,8 @@ def test_template_post_when_model_cannot_write(tmp_path, pack, cfg, monkeypatch)
     assert summary["verified_posts"] == 1 and summary["fallback_posts"] == 1
     card = json.loads((run_dir / "output" / "deck.json").read_text())["cards"][-1]
     assert card["fallback"] and pack.brand.name in card["post"]["linkedin"]
-    assert card["fact"]["category"] == "Brand introduction"
+    assert card["fact"]["category"] == "Spotlight"
+    assert "meet " not in card["post"]["linkedin"].lower()  # never an introduction
 
 
 def test_verified_runs_are_untouched(tmp_path, pack, cfg, monkeypatch):

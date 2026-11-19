@@ -63,7 +63,11 @@ class Settings:
     runs_dir: Path = field(default_factory=lambda: Path(_env("ANCHOR_RUNS_DIR", str(ENGINE_DIR / "runs"))))
     harness_dir: Path = field(default_factory=lambda: Path(_env("ANCHOR_HARNESS_DIR", str(ENGINE_DIR / "harness"))))
     # Subpages rendered after the home page (most important first; see crawl.candidate_urls).
-    max_pages: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_PAGES", "8")))
+    max_pages: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_PAGES", "6")))
+    # Second crawl level: individual blog posts, case studies, changelog and press entries linked
+    # from the index pages above. That is where dated, specific stories live.
+    max_article_pages: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_ARTICLE_PAGES", "4")))
+    article_budget: float = field(default_factory=lambda: float(_env("ANCHOR_ARTICLE_BUDGET", "90")))
     # Wall-clock seconds for rendering subpages; whatever was read by then is used.
     subpage_budget: float = field(default_factory=lambda: float(_env("ANCHOR_SUBPAGE_BUDGET", "150")))
     max_articles: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_ARTICLES", "6")))
@@ -75,8 +79,9 @@ class Settings:
     # News results for press research. Unset login/password = the step is skipped.
     dataforseo_login: str = field(default_factory=lambda: _env("DATAFORSEO_LOGIN"))
     dataforseo_password: str = field(default_factory=lambda: _env("DATAFORSEO_PASSWORD"))
-    dataforseo_location_code: int = field(default_factory=lambda: int(_env("DATAFORSEO_LOCATION_CODE", "2840")))  # US
-    dataforseo_language_code: str = field(default_factory=lambda: _env("DATAFORSEO_LANGUAGE_CODE", "en"))
+    # 0 / empty = detect from the site (URL path, <html lang>, country TLD; see market.geo_for).
+    dataforseo_location_code: int = field(default_factory=lambda: int(_env("DATAFORSEO_LOCATION_CODE", "0")))
+    dataforseo_language_code: str = field(default_factory=lambda: _env("DATAFORSEO_LANGUAGE_CODE", ""))
     dataforseo_max_competitors: int = field(default_factory=lambda: int(_env("DATAFORSEO_MAX_COMPETITORS", "6")))
     dataforseo_max_keywords: int = field(default_factory=lambda: int(_env("DATAFORSEO_MAX_KEYWORDS", "15")))
     dataforseo_news: bool = field(default_factory=lambda: _env("DATAFORSEO_NEWS", "true").lower() == "true")

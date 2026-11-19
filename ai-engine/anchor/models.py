@@ -84,10 +84,13 @@ class TaskPack(BaseModel):
     industry_reason: str = ""
     max_posts: int = 3
     script: str = "LATIN"  # writing system of the brand's own site; posts are written in it
+    language: str = "en"  # primary language subtag of the brand's site (<html lang>), e.g. en, nb, ja
     brand: BrandKit
     evidence: list[Evidence]
     pages_crawled: list[str] = Field(default_factory=list)
     market: Optional[MarketIntel] = None  # DataForSEO context, when configured
+    market_note: str = ""  # what happened with DataForSEO (off / used / empty / refused), for the report
+    already_posted: list[str] = Field(default_factory=list)  # headlines this brand posted in earlier runs
 
     def evidence_by_id(self) -> dict[str, Evidence]:
         return {e.id: e for e in self.evidence}
@@ -98,7 +101,8 @@ class TaskPack(BaseModel):
 
 class MinedFact(BaseModel):
     headline: str = Field(description="Factual headline, <= 90 chars")
-    category: str = Field(description="e.g. Launch, Partnership, Customer Outcome, Award, Funding, Offer")
+    category: str = Field(description="The post type: one of the loaded skill's post types, e.g. Customer story, "
+                          "Feature how-to, Proof point, Release (dated only)")
     evidence_ids: list[str] = Field(description="Ids of the evidence items that prove it")
     quote: str = Field(description="Exact verbatim span copied from one cited evidence item")
     metrics: list[str] = Field(default_factory=list, description="Numbers exactly as written in evidence")

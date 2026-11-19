@@ -39,7 +39,7 @@ PARA = ("Lumora is a workflow automation platform with an open API and SDK. Team
 
 
 def _page(title: str, body: str, head: str = "") -> str:
-    return (f"<!doctype html><html lang='en'><head><title>{title}</title>{head}</head>"
+    return (f"<!doctype html><html lang='en-US'><head><title>{title}</title>{head}</head>"
             f"<body><main>{body}</main></body></html>")
 
 
@@ -61,7 +61,15 @@ HOME = _page(
 GOOD = {
     "/customers": _page("Customers | Lumora", "<h1>Customers</h1><blockquote>Lumora cut our first response "
                         "time by 38% across 14 support teams in the first quarter, said Dana Ortiz, VP Support "
-                        "at Globex.</blockquote><p>" + PARA * 2 + "</p>"),
+                        "at Globex.</blockquote><p>" + PARA * 2 + "</p>"
+                        '<a href="/customers/initech-moves-support-to-lumora">Read the Initech story</a>'
+                        '<a href="/customers/page/2">More</a>'),
+    # One level deeper than the index page: only reachable through the article-link pass.
+    "/customers/initech-moves-support-to-lumora": _page(
+        "How Initech answers 9,000 tickets a month | Lumora",
+        '<article><time datetime="2026-10-14">October 14, 2026</time><h1>Initech moves support to Lumora</h1>'
+        "<p>Initech now answers 9,000 support tickets a month with Lumora, and its median reply time "
+        "fell from 6 hours to 41 minutes after the switch in September 2026.</p><p>" + PARA + "</p></article>"),
     "/integrations": _page("Integrations | Lumora", "<h1>Integrations</h1><p>Lumora integrates with Slack, "
                            "GitHub and Salesforce, with more than 120 integrations available today. "
                            + PARA + "</p>"),
@@ -164,6 +172,12 @@ def test_prepare_end_to_end_on_hostile_site(site, cfg, fast, monkeypatch, caplog
     assert not crawled & {"/changelog", "/blog", "/newsroom", "/press"}, crawled
     text = " ".join(e.text for e in pack.evidence)
     assert "38%" in text and "120 integrations" in text and "$19 per seat" in text
+    # Second crawl level: the dated customer story linked from /customers.
+    assert "/customers/initech-moves-support-to-lumora" in crawled
+    story = [e for e in pack.evidence if "9,000 support tickets" in e.text]
+    assert story and story[0].date == "2026-10-14"
+    assert "/customers/page/2" not in crawled
+    assert pack.language == "en" and pack.market_note.startswith("off:")
     assert (run_dir / "pack" / "pack.json").is_file()
 
     # Every subpage attempt is visible in the logs (the original bug was a silent hang).

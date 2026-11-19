@@ -60,6 +60,29 @@ _pool = ThreadPoolExecutor(max_workers=int(os.environ.get("ANCHOR_WORKERS", "1")
 _jobs: dict[str, dict] = {}
 _futures: dict = {}
 
+# Harness² refinement after a job, off the request path (anchor/h2/background.py): its own single
+# thread so it never delays user jobs. LLM calls only, no Chromium, so memory stays small.
+_refine_pool = ThreadPoolExecutor(max_workers=1, thread_name_prefix="h2-refine")
+AUTO_REFINE = os.environ.get("ANCHOR_AUTO_REFINE", "0") == "1"
+
+# Render's disk is wiped on deploy: bring back the Harness² library (promoted harnesses) from
+# Postgres if this instance starts without one.
+if storage.enabled() and not (cfg.library_dir / "agg").is_dir():
+    try:
+        storage.restore_dir("harness_library", cfg.library_dir)
+    except Exception as exc:  # a missing library only means base harnesses for now
+        log.warning("could not restore the Harness² library: %s", exc)
+
+
+def _background_refine(task_dir: Path) -> None:
+    from anchor.h2.background import refine_saved
+
+    try:
+        log.info("background refine: %s", refine_saved(task_dir, cfg))
+    except Exception:
+        log.exception("background refine of %s failed", task_dir.name)
+
+
 # Single production instance: whatever the DB still shows as in flight was cut off by the last
 # restart or deploy. Only on Render (or when opted in), so a local dev engine pointed at the same
 # database never fails production's live runs.
@@ -134,6 +157,8 @@ def _work(job_id: str, req: RunRequest) -> None:
                 formatted["storage_error"] = f"{type(exc).__name__}: {exc}"
                 storage.record_job(job_id, req.model_dump(), "done", "done", f"storage: {exc}")
         _jobs[job_id].update(status="done", stage="done", result=formatted, task_id=task_id)
+        if AUTO_REFINE and req.mode == "fast":
+            _refine_pool.submit(_background_refine, runs_dir / task_id)
     except progress.Cancelled:
         log.info("job %s cancelled", job_id)
         _jobs[job_id].update(status="cancelled", stage="cancelled")

@@ -46,6 +46,8 @@ def test_fast_runs_reuse_the_learned_industry_harness(cfg):
     assert learned_harness(cfg, "saas") == cfg.harness_dir  # empty library -> base
     adopted = cfg.library_dir / "agg" / "saas" / "harnesses" / "brand-1" / "harness"
     shutil.copytree(ENGINE_DIR / "harness", adopted)
+    assert learned_harness(cfg, "saas") == cfg.harness_dir  # stored but never promoted -> base
+    (adopted.parent / "PROMOTED.json").write_text('{"promoted_at": "2026-11-20T00:00:00+00:00", "gain": 0.5}')
     assert learned_harness(cfg, "saas") == adopted
     (adopted / "scripts").mkdir()
     (adopted / "scripts" / "x.py").write_text("print(1)")  # invalid for this executor -> skipped

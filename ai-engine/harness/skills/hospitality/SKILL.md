@@ -1,6 +1,6 @@
 ---
 name: hospitality
-description: Playbook for hotels, resorts, serviced residences, venues and restaurant groups - what guests and event planners act on and how to post it on LinkedIn and Instagram.
+description: Playbook for hotels, resorts, serviced residences, venues and restaurant groups - what guests, regulars and event planners act on and how to post it on LinkedIn and Instagram.
 industry: true
 keywords: [hotel, hotels, resort, resorts, suites, rooms, guest rooms, check-in, spa, dining, restaurant, restaurants, banquet, ballroom, wedding, weddings, meetings, events, staycation, concierge, stay, guests, rooftop]
 schema_types: [Hotel, LodgingBusiness, Resort, Motel, Hostel, BedAndBreakfast, Restaurant, FoodEstablishment, EventVenue]
@@ -9,19 +9,29 @@ news_queries:
   - '"{brand_name}" (award OR awards OR "Travelers'' Choice" OR Michelin OR "Condé Nast") {current_year}'
   - '"{brand_name}" (opens OR reopening OR renovation OR "new restaurant" OR chef OR menu)'
   - '"{brand_name}" (wedding OR conference OR festival OR "special event" OR package)'
+post_types: [Award, Opening, Dining spotlight, Guest experience, Planner brief, Offer, Behind the scenes, Local guide, Guest review, Sustainability]
 banned_phrases: [paradise found, escape to an oasis, memories that last a lifetime, home away from home, dive into luxury, world-class amenities, hidden gem, nestled, tranquil oasis, unparalleled luxury]
 ---
 
 # Hospitality playbook
 
-## What is worth posting (in priority order)
-1. Awards and recognitions, named exactly as the evidence names them, with year if stated.
-2. Openings, reopenings, renovations, new restaurants, new chefs or menus.
-3. Dated offers, packages, events, festivals, seasonal menus - only with the dates and terms
-   the evidence shows.
-4. Capacity and amenities for planners: room and suite counts, ballroom or meeting capacity,
-   square footage, distance to airport or landmarks - exactly as stated.
-5. Guest reviews or ratings, quoted verbatim and attributed to the source (e.g. the review site).
+Our followers are past and future guests, locals, regulars, event and travel planners and
+hospitality peers. They already know the property; give them a reason to come back, book an
+event or share it.
+
+## Post types (set `category` to one of these)
+- **Award**: a recognition named exactly as the evidence names it, with year if stated.
+- **Opening**: an opening, reopening, renovation, new restaurant, chef or menu. Needs a dated
+  item from the last 18 months.
+- **Dining spotlight**: one dish, menu, bar or chef detail, sensory and specific.
+- **Guest experience**: one room, view, spa treatment or ritual, told through its true details.
+- **Planner brief**: capacities and logistics for MICE and wedding planners: rooms, ballroom
+  size, square footage, distance to the airport, exactly as stated.
+- **Offer**: a package or seasonal offer, only with the dates and terms the evidence shows.
+- **Behind the scenes**: the team, kitchen, housekeeping, sourcing or craft behind the stay.
+- **Local guide**: what is nearby and how far, as stated; no invented scenery.
+- **Guest review**: a review or rating quoted verbatim and attributed to its source.
+- **Sustainability**: a measured practice (recycling rate, sourcing) exactly as stated.
 
 ## Claim rules for this industry
 - Never award Michelin stars, "best hotel" titles, rankings or celebrity chefs the evidence
@@ -29,7 +39,6 @@ banned_phrases: [paradise found, escape to an oasis, memories that last a lifeti
 - Prices and package inclusions only as written, with currency and conditions; omit if absent.
 - Capacities, room counts, distances and dates must match the evidence exactly.
 - Do not imply availability ("book now for this weekend") from undated offers.
-- Location descriptions stay factual (what is near, how far); no invented scenery.
 
 ## LinkedIn
 Audience: corporate travel managers, event and MICE planners, wedding planners, partners,
@@ -43,9 +52,9 @@ Audience: guests, couples, food lovers, locals. Sensory but factual: one vivid t
 lines; 3-5 place- or experience-specific hashtags (#[city]dining style, not #travelgoals).
 
 ## Poster
-Headline = the news in plain words (award, opening, offer). Kicker = the venue or outlet name
-or the category. Stat = one number guests or planners care about (rooms, capacity, rating).
+Headline = the news or the detail in plain words. Kicker = the venue or outlet name or the post
+type. Stat = one number guests or planners care about (rooms, capacity, rating).
 
 ## When evidence is thin
-A property page with rooms, dining and location facts can carry one strong "plan your event"
-post and one guest-experience post; do not stretch it to more.
+A property page with rooms, dining and location facts carries a Planner brief and a Dining
+spotlight or Guest experience post; do not stretch it to more.

@@ -14,6 +14,7 @@ Mapping onto the Harness² method:
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 
 from harness2.core.spec import BenchPrompts, BenchSpec, ChannelSpec
@@ -87,6 +88,21 @@ PROMPTS = BenchPrompts(
 )
 
 
+# Model/provider failures (bad JSON, rate limits, timeouts, outages). They are not caused by the
+# harness and no harness edit fixes them; left unmarked, the improver "fixes" them by inventing
+# skills (a real run added a post_writer skill after the writer returned invalid JSON).
+_INFRA = re.compile(r"could not obtain valid JSON|no JSON object found|rate.?limit|\b429\b|\b50[0-4]\b|"
+                    r"timed? ?out|timeout|connection (?:error|reset|refused)|No usable endpoint|quota|"
+                    r"provider unavailable|independent claim check could not run|LLMError", re.I)
+
+
+def _mark_infra(line: str) -> str:
+    if _INFRA.search(line) and line.startswith(("[ERROR]", "[OBSERVATION]")):
+        return ("[INFRA] (model/provider failure, not caused by the harness; do NOT edit the harness "
+                "for it) " + line)
+    return line
+
+
 class AnchorAdapter:
     def __init__(self, run_dir: Path, pack: TaskPack, cfg: Settings, base_harness: Path):
         self.cfg = cfg
@@ -158,8 +174,8 @@ class AnchorAdapter:
     def trajectory(self, run_dir: Path, *, obs_trunc: int) -> str:
         p = Path(run_dir) / "trajectory.md"
         text = p.read_text(encoding="utf-8") if p.is_file() else "(no trajectory written)"
-        return "\n".join(line if len(line) <= obs_trunc else line[:obs_trunc] + " ...[renderer truncated]"
-                         for line in text.splitlines())
+        return "\n".join(_mark_infra(line) if len(line) <= obs_trunc else _mark_infra(line)[:obs_trunc]
+                         + " ...[renderer truncated]" for line in text.splitlines())
 
     def deliverable_text(self, run_dir: Path) -> str:
         p = Path(run_dir) / "posts.md"

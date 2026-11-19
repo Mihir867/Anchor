@@ -76,7 +76,8 @@ TOKENS_JS = r"""() => {
     background: bg, text: hex(getComputedStyle(document.body).color) || "#111111",
     heading_font: fam(document.querySelector("h1, h2")), body_font: fam(document.querySelector("p") || document.body),
     font_faces: fontFaces.slice(0, 40), images: imgs, links,
-    h1: (document.querySelector("h1") || {}).innerText || "" };
+    h1: (document.querySelector("h1") || {}).innerText || "",
+    lang: (document.documentElement.getAttribute("lang") || "").trim() };
 }"""
 
 # Run just before page.content(): keep only what extract.py reads (text, headings, quotes, meta,
@@ -491,6 +492,42 @@ def candidate_urls(result: CrawlResult, priority_paths: list[str], limit: int) -
             if signal.search(urlparse(l).path):
                 add(l)
     return ordered
+
+
+_INDEX = re.compile(r"/(blog|news|newsroom|press|media|customers?|case-stud(y|ies)|success-stor(y|ies)|stories|"
+                    r"changelog|releases?|updates|insights|resources|journal|articles|events)(/|$)", re.I)
+_NOT_ARTICLE = re.compile(r"/(page|tag|tags|category|categories|author|authors|topic|topics|search|feed)(/|$)|"
+                          r"[?#]", re.I)
+
+
+def article_links(pages: list[Page], home_url: str, exclude: set[str], limit: int, per_index: int = 2) -> list[str]:
+    """Links to individual posts under the crawled index pages (/blog/<slug>, /customers/<slug>,
+    /changelog/<entry>...), in page order (index pages list the newest first)."""
+    from bs4 import BeautifulSoup
+
+    host = urlparse(home_url).netloc.removeprefix("www.")
+    seen = {u.rstrip("/") for u in exclude}
+    out: list[str] = []
+    for pg in pages:
+        base = urlparse(pg.url).path.rstrip("/")
+        if not _INDEX.search(base + "/"):
+            continue
+        taken = 0
+        for a in BeautifulSoup(pg.html, "html.parser").find_all("a", href=True):
+            u = urljoin(pg.url, a["href"]).split("#")[0].split("?")[0].rstrip("/")
+            pu = urlparse(u)
+            path = pu.path.rstrip("/")
+            if (pu.netloc.removeprefix("www.") != host or u in seen or _SKIP.search(path) or _NOT_ARTICLE.search(path)
+                    or not path.startswith(base + "/") or len(path.rsplit("/", 1)[-1]) < 6):
+                continue
+            seen.add(u)
+            out.append(u)
+            taken += 1
+            if taken >= per_index or len(out) >= limit:
+                break
+        if len(out) >= limit:
+            break
+    return out
 
 
 SITEMAP_SECONDS = 15  # wall clock: httpx's timeout is per read, so a trickling server never trips it

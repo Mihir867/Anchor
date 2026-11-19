@@ -103,6 +103,15 @@ CREATE TABLE IF NOT EXISTS assets (
     created_at  TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX IF NOT EXISTS assets_run_idx ON assets (run_id);
+
+-- Engine state that must survive deploys (Render disks are ephemeral): per-brand post history,
+-- and the Harness² library (a tar.gz of runs/library/agg).
+CREATE TABLE IF NOT EXISTS engine_state (
+    key         TEXT PRIMARY KEY,
+    value       JSONB,
+    blob        BYTEA,
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now()
+);
 """
 
 _init_lock = threading.Lock()
@@ -156,6 +165,79 @@ def init() -> None:
             conn.execute(SCHEMA)
         _initialised = True
         log.info("[storage] Postgres schema ready")
+
+
+def get_state(key: str) -> dict | None:
+    """JSON value stored under `key`, or None (also when storage is off or unreachable)."""
+    if not enabled():
+        return None
+    try:
+        init()
+        with _connect() as conn:
+            row = conn.execute("SELECT value FROM engine_state WHERE key = %s", (key,)).fetchone()
+        return row[0] if row else None
+    except Exception as exc:
+        log.warning("[storage] reading state %s failed: %s", key, exc)
+        return None
+
+
+def put_state(key: str, value: dict | None = None, blob: bytes | None = None) -> bool:
+    if not enabled():
+        return False
+    try:
+        init()
+        with _connect() as conn:
+            conn.execute(
+                "INSERT INTO engine_state (key, value, blob, updated_at) VALUES (%s, %s, %s, now()) "
+                "ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, blob = EXCLUDED.blob, updated_at = now()",
+                (key, _jsonb(value) if value is not None else None, blob))
+        return True
+    except Exception as exc:
+        log.warning("[storage] writing state %s failed: %s", key, exc)
+        return False
+
+
+def get_blob(key: str) -> bytes | None:
+    if not enabled():
+        return None
+    try:
+        init()
+        with _connect() as conn:
+            row = conn.execute("SELECT blob FROM engine_state WHERE key = %s", (key,)).fetchone()
+        return bytes(row[0]) if row and row[0] is not None else None
+    except Exception as exc:
+        log.warning("[storage] reading blob %s failed: %s", key, exc)
+        return None
+
+
+def save_dir(key: str, directory: Path) -> bool:
+    """Store a whole directory (tar.gz) under `key`; restore it with restore_dir."""
+    import io
+    import tarfile
+
+    directory = Path(directory)
+    if not enabled() or not directory.is_dir():
+        return False
+    buf = io.BytesIO()
+    with tarfile.open(fileobj=buf, mode="w:gz") as tar:
+        tar.add(directory, arcname=".")
+    return put_state(key, {"bytes": buf.tell(), "saved_at": datetime.now(timezone.utc).isoformat()},
+                     buf.getvalue())
+
+
+def restore_dir(key: str, directory: Path) -> bool:
+    import io
+    import tarfile
+
+    data = get_blob(key)
+    if not data:
+        return False
+    directory = Path(directory)
+    directory.mkdir(parents=True, exist_ok=True)
+    with tarfile.open(fileobj=io.BytesIO(data), mode="r:gz") as tar:
+        tar.extractall(directory, filter="data")
+    log.info("[storage] restored %s into %s", key, directory)
+    return True
 
 
 def _jsonb(value):

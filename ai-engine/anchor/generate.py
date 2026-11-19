@@ -20,7 +20,7 @@ from .config import Settings
 from .llm import LLM, LLMError
 from .models import (Card, CriticReport, Evidence, MinedFact, MinedFacts, PostDraft,
                      RolloutResult, SkillChoice, Slide, TaskPack)
-from .verify import GLOBAL_BANNED, check_fact, check_post, norm, normalize_post
+from .verify import GLOBAL_BANNED, check_fact, check_post, norm, normalize_post, same_topic
 
 log = logging.getLogger("anchor.generate")
 
@@ -47,18 +47,27 @@ class Trajectory:
 
 MINE_TASK = """STAGE 1 OF 2 -- SELECT FACTS FOR {brand}
 
-From the evidence below, select up to {n} distinct, post-worthy facts about {brand}, following
-the loaded skill's guidance on what is worth posting for this industry.
+{brand} will post these on its OWN LinkedIn and Instagram, to people who already follow it. From
+the evidence below, select up to {n} distinct facts that would give those followers something
+new, following the loaded skill's guidance.
 
+POST TYPES (set `category` to exactly one; use a different type for each fact where the evidence
+allows): {post_types}
+{already_posted}
 Rules for every fact:
 - `evidence_ids`: the ids of the items that prove it. Only ids that appear below.
 - `quote`: copy ONE full sentence or clause CHARACTER-FOR-CHARACTER from a cited item. It will
   be machine-checked as an exact substring; paraphrase fails.
 - `metrics`: numbers exactly as written in the cited items. `named_entities`: partners,
   customers, people, places exactly as written. Leave lists empty rather than guess.
-- `headline`: factual, no number or name that is not in the cited items.
-- Prefer specific, recent, third-party-confirmed facts over generic marketing claims.
-- Never combine facts from different items into a claim neither item makes.
+- `headline`: factual, no number or name that is not in the cited items. Not an introduction
+  ("Meet...", "X is a platform that...").
+- Types that announce something new (Release, Launch, Opening, Collection drop, News) need a
+  dated item from the last 18 months; undated site copy is a how-to, spotlight or proof point.
+- Prefer specific, recent, third-party-confirmed facts and deeper pages (case studies, blog
+  posts, changelogs, press, reviews) over homepage taglines, which followers already know.
+- Never pick two facts about the same topic. Never combine facts from different items into a
+  claim neither item makes.
 {market}
 EVIDENCE ({count} items, most specific first):
 {evidence}
@@ -66,8 +75,9 @@ EVIDENCE ({count} items, most specific first):
 
 WRITE_TASK = """STAGE 2 OF 2 -- WRITE THE POSTS FOR ONE FACT
 
-Brand: {brand} ({url})
+Brand: {brand} ({url}) -- you ARE {brand}, posting on its own channels to existing followers.
 Today's date: {today}
+Post type: {post_type} (follow the loaded skill's guidance for this type)
 
 THE FACT
 {fact}
@@ -75,38 +85,24 @@ THE FACT
 THE ONLY MATERIAL YOU MAY STATE AS FACT (cited evidence, verbatim):
 {sources}
 
-VOICE -- pick ONE register that fits THIS fact, its audience and the industry, and commit to it
-across every field. Set `voice` to its name.
-- celebratory: a launch, general availability, award, milestone, funding round, opening. Energy and
-  momentum: vivid verbs ("ships", "opens", "lands"), a punchy first line, one exclamation mark at most.
-- authoritative: a partnership, enterprise deal, compliance credential, research or policy. Crisp,
-  confident, executive: lead with what changed and for whom, no adjectives doing the work of facts.
-- storyteller: a customer outcome, testimonial, founder or team moment. Open on the person or the
-  problem, then the turn, then the result -- a tiny narrative arc.
-- inviting: hospitality, dining, travel, an experience or a product people use with their senses.
-  Place-led and sensory (what you see, taste, hear) -- grounded in the evidence's own details.
-- urgent: an offer, price, deadline, limited event or seasonal window. Direct, benefit first, a
-  clear call to action; state dates and terms exactly as given.
-- insightful: data, a trend, a how-to, a feature explained. Lead with the tension or the surprising
-  number, then the explanation.
-The register changes the WORDS, never the facts: excitement comes from rhythm, verbs and framing,
-not from superlatives ("best", "leading", "first") the evidence does not state.
+Write as {brand} in the first person ("we", "our"), naming {brand} at least once. Third parties
+(press, partners, customers) keep their attribution. Pick ONE register from the system prompt's
+Voice section that fits this fact and post type, commit to it across every field, and set
+`voice` to its name. Writing as "we" is not a licence to invent our intentions, process or
+history: "we built X so that...", "our team designed..." need evidence like any other claim. No introductions: followers already know {brand}; open with the result,
+the detail, the story or the answer.
 
-Write, following the voice above and the loaded skill's LinkedIn and Instagram guidance, entirely in
-{language} (translate anything the evidence says in another language; never paste another script):
-- `linkedin`: 600-1800 characters. The first line is the hook (under 200 characters) and must work
-  before "see more": a sharp claim, a striking number, or a tension -- never a throat-clearing
-  "We are pleased to announce" or "Exciting news". Short paragraphs separated by blank lines.
-  Name {brand}. End with a specific, non-generic close (no "Thoughts?"). 0-2 emojis. At most 3
-  hashtags at the end.
-- `instagram_caption`: 150-900 characters, written for the scroll, not a press release: a hook
-  line that stops the thumb, then 2-4 short lines (line breaks between them), one concrete detail
-  from the evidence, and a closing line that invites action (save, visit, book, try, tag someone)
-  in the chosen voice. 1-3 emojis that fit the voice are welcome; never an emoji string. Names {brand}.
-- `hashtags`: 3-5, specific to the subject (no #success/#motivation filler).
-- `poster_headline` (<= 80 chars) for the COVER slide, `poster_kicker` (<= 48 chars: a neutral topic
-  label such as "Customer story", "Dining", "Offer" -- never "Launch"/"New" unless the evidence says
-  so), `poster_stat` (optional; ONE number+unit copied from the evidence, else empty).
+Write, following the loaded skill's LinkedIn and Instagram guidance and the format rules in the
+pipeline guidance, entirely in {language} (translate anything the evidence says in another
+language; never paste another script):
+- `linkedin`: 500-2000 characters; a hook first line under 200 characters; short paragraphs
+  separated by blank lines; a specific close; 0-2 emojis; at most 3 hashtags at the end.
+- `instagram_caption`: 150-1000 characters; hook, 2-4 short lines with line breaks, one concrete
+  detail, a closing line inviting action; 1-3 fitting emojis.
+- `hashtags`: 3-5, specific to the subject.
+- `poster_headline` (<= 80 chars) for the COVER slide, `poster_kicker` (<= 48 chars: a neutral
+  label for the post type such as "Customer story", "How-to", "Dining"; "New"/"Launch" only for
+  a dated announcement), `poster_stat` (optional; ONE number+unit copied from the evidence).
 - `slides`: exactly {n_slides} carousel slides that follow the cover and EXPLAIN it, one idea each
   (e.g. what happened -> how it works / the details -> the proof or who it is for). Each slide has a
   `title` (<= 60 chars) and 2-3 `bullets` (<= 120 chars), every bullet a specific fact from the
@@ -115,9 +111,9 @@ Write, following the voice above and the loaded skill's LinkedIn and Instagram g
 {market}
 Every number, name, date, award or superlative you write must appear in the material above.
 If the material does not say it, do not say it -- write around the gap instead. In particular:
-- Do NOT state benefits, outcomes, scope ("all", "every"), audience impact or reasons the material
-  does not state ("reducing overhead", "so teams can..."). Perspective is allowed only as an explicit
-  question to the reader or an attributed view ("{brand} says...").
+- Do NOT state outcomes, benefits, scope ("all", "every") or results the material does not
+  state. Our point of view is welcome when framed as opinion ("We think...", "Our take:") or as a
+  question to the reader, and it adds no new fact.
 - Do NOT compute new numbers (differences, totals, multiples) from the evidence; quote them as given.
 """
 
@@ -135,6 +131,10 @@ replacing it with a different unsupported claim.
 """
 
 CRITIC_SYSTEM = """You are an independent fact-checker for a brand's social posts. You did not write them.
+The posts are written BY the brand on its own channels, in the first person ("we", "our"): the
+brand's own pages in the evidence are the brand speaking, so "we built X" is supported when the
+brand's page says it built X. Opinions plainly framed as the brand's view ("We think...") are not
+factual claims unless they smuggle in a number, name or result.
 Check every factual statement in the posts against the SOURCE EVIDENCE only. A statement is
 unsupported if the evidence does not state it, if it exaggerates it (e.g. "leading", "first",
 "largest", "award-winning" without the evidence saying so), merges separate facts into a new
@@ -145,8 +145,10 @@ The writer picked a register (`voice`) for this fact. Energy, rhythm, vivid verb
 exclamation mark or a fitting emoji are NOT problems when they suit that voice -- judge the tone
 against the voice and the playbook, not against a neutral press-release style. Flag as voice
 problems only what would embarrass the brand: clichés, unsupported hype words, emoji spam,
-engagement bait, a flat or generic opening line, or a register that clearly mismatches the
-fact (e.g. jokey about a compliance credential). Return empty lists when everything is
+engagement bait, a flat or generic opening line, a post that merely introduces the brand or
+explains what it does (its followers already know), the brand described in the third person
+("Acme says..."), or a register that clearly mismatches the fact (e.g. jokey about a compliance
+credential). Return empty lists when everything is
 supported. Do not rewrite the posts."""
 
 
@@ -172,6 +174,9 @@ def market_block(pack: TaskPack, stage: str) -> str:
         lines.append(f"- What this audience searches for: {demand}.")
     if gaps:
         lines.append(f"- Topics competitors win in search and {b} does not yet: {gaps}.")
+    qs = "; ".join(k.keyword for k in market.questions(m)[:8])
+    if qs:
+        lines.append(f"- Questions this audience searches for (an Answer post fits when the evidence answers one): {qs}.")
     if stage == "mine":
         lines.append(f"Use it to CHOOSE: prefer facts that show what sets {b} apart from these competitors "
                      "and facts that answer what this audience searches for, or fill a gap topic. A fact "
@@ -208,6 +213,21 @@ def choose_skills(h: harness_mod.Harness, pack: TaskPack, llm: LLM, traj: Trajec
     return chosen
 
 
+def post_types(h: harness_mod.Harness, skills: list[str]) -> list[str]:
+    out: list[str] = []
+    for name in skills:
+        if name in h.skills:
+            out += [t for t in h.skills[name].list_meta("post_types") if t not in out]
+    return out or ["Customer story", "Feature how-to", "Proof point", "Release", "Partnership", "Our take"]
+
+
+def _already_posted(pack: TaskPack) -> str:
+    if not pack.already_posted:
+        return ""
+    return ("\nALREADY POSTED in earlier runs (do not pick these again, nor another fact on the same topic):\n"
+            + "\n".join(f"- {h}" for h in pack.already_posted[:25]) + "\n")
+
+
 def _batches(pack: TaskPack, size: int, limit: int) -> list[str]:
     """Most-specific-first evidence, split into prompt-sized batches."""
     batches, cur, used = [], [], 0
@@ -226,7 +246,8 @@ def _batches(pack: TaskPack, size: int, limit: int) -> list[str]:
 
 
 def mine(pack: TaskPack, system: str, llm: LLM, cfg: Settings, traj: Trajectory,
-         batches: range | None = None, known: list[MinedFact] | None = None) -> list[MinedFact]:
+         batches: range | None = None, known: list[MinedFact] | None = None,
+         types: list[str] | None = None) -> list[MinedFact]:
     ev = pack.evidence_by_id()
     want = pack.max_posts * 2
     good: list[MinedFact] = list(known or [])
@@ -239,7 +260,8 @@ def mine(pack: TaskPack, system: str, llm: LLM, cfg: Settings, traj: Trajectory,
         b_idx += 1
         count = block.count("\n\n[E") + 1
         task = MINE_TASK.format(brand=pack.brand.name, n=pack.max_posts, count=count, evidence=block,
-                                market=market_block(pack, "mine"))
+                                market=market_block(pack, "mine"), post_types=", ".join(types or post_types_default()),
+                                already_posted=_already_posted(pack))
         traj.action(f"mine batch {b_idx}: up to {pack.max_posts} facts from {count} evidence items")
         feedback = ""
         for round_no in (1, 2):
@@ -251,6 +273,8 @@ def mine(pack: TaskPack, system: str, llm: LLM, cfg: Settings, traj: Trajectory,
             rejected = []
             for f in got.facts:
                 problems = check_fact(f, ev, pack.brand.name)
+                if not problems and any(same_topic(_topic(f), h) for h in pack.already_posted):
+                    problems = ["already posted in an earlier run (same topic); pick a different fact"]
                 if problems:
                     rejected.append((f, problems))
                     traj.observe(f"REJECTED fact {f.headline!r}: " + "; ".join(problems))
@@ -272,16 +296,29 @@ def mine(pack: TaskPack, system: str, llm: LLM, cfg: Settings, traj: Trajectory,
     return good[len(known or []):]
 
 
+def post_types_default() -> list[str]:
+    return ["Customer story", "Feature how-to", "Proof point", "Release", "Partnership", "Our take"]
+
+
+def _topic(f: MinedFact) -> str:
+    return f"{f.headline} {f.quote}"
+
+
 def _same(a: MinedFact, b: MinedFact) -> bool:
-    return set(a.evidence_ids) == set(b.evidence_ids) or norm(a.quote) == norm(b.quote)
+    """Same fact or same topic: never two posts about the same news in one set."""
+    return (set(a.evidence_ids) == set(b.evidence_ids) or norm(a.quote) == norm(b.quote)
+            or same_topic(a.headline, b.headline) or same_topic(_topic(a), _topic(b), 0.6))
 
 
 def rank(facts: list[MinedFact], ev: dict[str, Evidence], n: int,
-         terms: dict[str, float] | None = None) -> list[MinedFact]:
+         terms: dict[str, float] | None = None, home_url: str = "") -> list[MinedFact]:
     """Recency, specificity and third-party proof; with market context, plus up to +1.5 for a
-    fact about what the audience searches for (weighted by search volume)."""
+    fact about what the audience searches for (weighted by search volume). Homepage hero copy
+    ranks lower (followers already know it). The order is then picked greedily so the first
+    posts use different post types and never repeat a topic."""
     today = date.today()
     terms = terms or {}
+    home = (home_url or "").rstrip("/")
 
     def demand(f: MinedFact) -> float:
         if not terms:
@@ -299,16 +336,21 @@ def rank(facts: list[MinedFact], ev: dict[str, Evidence], n: int,
             recency = 0.8
         third_party = 1.2 if any(e.kind == "article" for e in cited) else 0.0
         proof = 0.6 if any(e.kind in ("testimonial", "structured") for e in cited) else 0.0
+        hero = -1.0 if home and cited and all(e.kind == "site" and e.url.rstrip("/") == home for e in cited) else 0.0
         return (recency + min(len(f.metrics), 3) * 0.8 + min(len(f.named_entities), 3) * 0.6 + third_party
-                + proof + demand(f))
+                + proof + demand(f) + hero)
 
-    ordered = sorted(facts, key=value, reverse=True)
-    distinct: list[MinedFact] = []
-    for f in ordered:
-        if all(f.evidence_ids[0] != p.evidence_ids[0] for p in distinct):
-            distinct.append(f)
-    rest = [f for f in ordered if f not in distinct]
-    return (distinct + rest)[:n]
+    pool = sorted(facts, key=value, reverse=True)
+    ordered: list[MinedFact] = []
+    while pool:
+        used = {norm(f.category) for f in ordered}
+        sources = {f.evidence_ids[0] for f in ordered if f.evidence_ids}
+        best = max(pool, key=lambda f: value(f) - (1.5 if norm(f.category) in used else 0.0)
+                   - (1.0 if f.evidence_ids and f.evidence_ids[0] in sources else 0.0))
+        pool.remove(best)
+        if not any(_same(best, g) for g in ordered):
+            ordered.append(best)
+    return ordered[:n]
 
 
 def write_card(idx: int, fact: MinedFact, pack: TaskPack, h: harness_mod.Harness, skills: list[str],
@@ -322,6 +364,7 @@ def write_card(idx: int, fact: MinedFact, pack: TaskPack, h: harness_mod.Harness
         language=_LANGUAGE.get(pack.script, f"the language of {pack.brand.name}'s own website"),
         fact=json.dumps(fact.model_dump(), indent=1, ensure_ascii=False),
         sources="\n\n".join(e.render() for e in sources), market=market_block(pack, "write"),
+        post_type=fact.category or "Spotlight",
     )
     rivals = market.competitor_names(pack.market)
     skill_text = "\n\n".join(h.skills[s].body for s in skills if s in h.skills)
@@ -345,9 +388,9 @@ def write_card(idx: int, fact: MinedFact, pack: TaskPack, h: harness_mod.Harness
             traj.error(f"post {idx}: writer failed: {exc}")
             problems = [f"writer failed: {exc}"]
             break
-        draft = normalize_post(draft, fact, cfg.detail_slides)
+        draft = normalize_post(draft, fact, cfg.detail_slides, pack.brand.name)
         problems = check_post(draft, fact, sources, pack.brand.name, banned, cfg.detail_slides, pack.script,
-                              competitors=rivals)
+                              competitors=rivals, language=pack.language)
         soft = []
         if not problems:
             problems, soft = _critic(draft, sources, skill_text, critic, idx, traj)
@@ -407,8 +450,12 @@ def generate(pack: TaskPack, harness_dir: Path, out_dir: Path, cfg: Settings) ->
         traj.observe(f"market context (DataForSEO, not evidence): competitors {[c.domain for c in m.competitors]}; "
                      f"top searches {[k.keyword for k in m.brand_keywords[:6]]}; "
                      f"gap topics {[k.keyword for k in m.gap_keywords[:6]]}")
-    facts = mine(pack, system, writer, cfg, traj)
-    queue = rank(facts, ev, len(facts), terms)
+    types = post_types(h, skills)
+    if pack.already_posted:
+        traj.observe(f"{len(pack.already_posted)} headlines already posted for this brand in earlier runs; "
+                     "they are excluded")
+    facts = mine(pack, system, writer, cfg, traj, types=types)
+    queue = rank(facts, ev, len(facts), terms, pack.url)
     traj.observe(f"{len(facts)} facts passed checks; target {pack.max_posts} posts (minimum {cfg.min_posts}); "
                  f"order: {[f.headline for f in queue]}")
     cards: list[Card] = []
@@ -420,10 +467,10 @@ def generate(pack: TaskPack, harness_dir: Path, out_dir: Path, cfg: Settings) ->
             if sum(c.status == "verified" for c in cards) >= cfg.min_posts or next_batch >= total_batches:
                 break
             traj.action(f"backfill: only {sum(c.status == 'verified' for c in cards)} verified; mining more evidence")
-            more = mine(pack, system, writer, cfg, traj, range(next_batch, next_batch + 2), facts)
+            more = mine(pack, system, writer, cfg, traj, range(next_batch, next_batch + 2), facts, types)
             next_batch += 2
             facts += more
-            queue = rank(more, ev, len(more), terms)
+            queue = rank(more, ev, len(more), terms, pack.url)
             if not queue:
                 continue
         fact = queue.pop(0)
@@ -495,31 +542,41 @@ def _mark_fallback(card: Card) -> None:
 
 
 def _intro_fact(pack: TaskPack) -> MinedFact:
+    """Last-resort fact: the most specific item the brand published itself (not a homepage
+    tagline), posted as a spotlight on that detail rather than an introduction."""
+    from .extract import informativeness
+
     b = pack.brand
-    cited = [e for e in pack.evidence if e.kind != "article"][:3] or pack.evidence[:3]
+    home = b.url.rstrip("/")
+    own = [e for e in pack.evidence if e.kind != "article"] or list(pack.evidence)
+    own.sort(key=lambda e: (e.url.rstrip("/") != home, informativeness(e.text)), reverse=True)
+    cited = own[:1]
     first = cited[0].text if cited else (b.description or b.tagline or b.name)
     quote = re.split(r"(?<=[.!?])\s+", first.strip())[0][:300]
-    headline = b.tagline if 8 <= len(b.tagline) <= 90 else f"Meet {b.name}"
-    return MinedFact(headline=headline[:90], category="Brand introduction",
+    title = (cited[0].title if cited else "") or b.tagline or b.name
+    headline = re.split(r"\s[|\-–—:·]\s", title)[0].strip() or b.name
+    return MinedFact(headline=headline[:90], category="Spotlight",
                      evidence_ids=[e.id for e in cited], quote=quote,
-                     why_it_matters=(b.description or f"What {b.name} does, in its own words.")[:300])
+                     why_it_matters=(b.description or f"A detail from {b.name}'s own pages.")[:300])
 
 
 def _template_post(pack: TaskPack, fact: MinedFact, n_slides: int) -> PostDraft:
-    """Deterministic last resort: only the brand's own words, no claims added."""
+    """Deterministic last resort: only the brand's own words, no claims added, no introduction."""
     b = pack.brand
-    about = (b.description or fact.quote or b.tagline).strip()
+    cited = [e for e in pack.evidence if e.id in fact.evidence_ids] or pack.evidence[:1]
+    body = (cited[0].text if cited else (b.description or fact.quote or b.tagline)).strip()
     tag = "#" + re.sub(r"[^0-9A-Za-z]+", "", b.name)[:30] if re.sub(r"[^0-9A-Za-z]+", "", b.name) else ""
     hashtags = [t for t in (tag,) if t]
-    lines = [s for s in re.split(r"(?<=[.!?])\s+", " ".join(e.text for e in pack.evidence[:4])) if 20 <= len(s) <= 120]
-    bullets = lines[: 2 * n_slides] or [about[:120]]
-    slides = [Slide(title=("About " + b.name)[:60] if i == 0 else f"More from {b.name}"[:60],
+    lines = [s for s in re.split(r"(?<=[.!?])\s+", " ".join(e.text for e in cited + pack.evidence[:3])) if 20 <= len(s) <= 120]
+    bullets = list(dict.fromkeys(lines))[: 2 * n_slides] or [body[:120]]
+    slides = [Slide(title=(fact.headline if i == 0 else f"More from {b.name}")[:60],
                     bullets=bullets[i * 2:(i + 1) * 2] or bullets[:1]) for i in range(n_slides)]
+    more = f"\n\nMore on our site: {cited[0].url if cited else b.url}"
     return PostDraft(
-        voice="authoritative",
-        linkedin=f"Meet {b.name}.\n\n{about}\n\nLearn more at {b.url}" + (f"\n\n{tag}" if tag else ""),
-        instagram_caption=f"Meet {b.name} ✨\n\n{about[:600]}\n\nVisit {b.domain} to learn more.",
-        hashtags=hashtags, poster_headline=fact.headline[:80], poster_kicker="About us",
+        voice="insightful",
+        linkedin=f"{fact.headline}\n\n{body[:1500]}{more}" + (f"\n\n{tag}" if tag else ""),
+        instagram_caption=f"{fact.headline}\n\n{body[:600]}\n\nMore at {b.domain}.",
+        hashtags=hashtags, poster_headline=fact.headline[:80], poster_kicker="Spotlight",
         poster_stat="", slides=slides,
     )
 
