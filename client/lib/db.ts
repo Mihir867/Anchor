@@ -5,6 +5,28 @@
 // only reads them. Keep the column names here in sync with storage.SCHEMA.
 import { Pool } from "pg";
 import type { PostCard, RunItem, RunJobResponse } from "./api";
+import { PUBLIC_ERROR } from "./engine";
+
+// Engine stage names describe the pipeline; the browser gets neutral step ids instead.
+const STAGE_IDS: Record<string, string> = {
+  crawling: "discover",
+  researching: "explore",
+  mining: "curate",
+  writing: "write",
+  rendering: "design",
+  saving: "polish",
+};
+function publicStage(stage: string | null, status: string): string {
+  const s = stage ?? status;
+  return STAGE_IDS[s] ?? (["queued", "done", "failed"].includes(s) ? s : "discover");
+}
+
+// Only these live-progress fields reach the browser; the rest describe how the engine works.
+function publicProgress(p: RunJobResponse["progress"] | null): RunJobResponse["progress"] | undefined {
+  if (!p) return undefined;
+  const { brand, post, target, verified, headline } = p;
+  return { brand, post, target, verified, headline };
+}
 
 declare global {
   // Reuse one pool across hot reloads in dev.
@@ -73,9 +95,6 @@ interface PostRow {
   slides: { title: string; bullets: string[] }[];
   fact: PostCard["fact"];
   sources: PostCard["sources"];
-  notes: string[];
-  problems: string[];
-  attempts: number;
   slide_urls: string[];
   pdf_url: string | null;
 }
@@ -93,7 +112,7 @@ export async function dbListRuns(limit = 50): Promise<RunItem[]> {
     brand: r.brand ?? r.url,
     url: r.url,
     industry: r.industry ?? undefined,
-    stage: r.stage ?? undefined,
+    stage: r.stage ? publicStage(r.stage, r.status) : undefined,
     verified_posts: r.verified_posts,
     created_at: r.created_at.toISOString(),
     mode: r.mode ?? "fast",
@@ -113,10 +132,11 @@ export async function dbGetRun(id: string): Promise<RunJobResponse | null> {
   const base: RunJobResponse = {
     job_id: run.id,
     status: run.status,
-    stage: run.stage ?? run.status,
-    error: run.error ?? undefined,
-    request: run.request ?? undefined,
-    progress: run.progress ?? undefined,
+    stage: publicStage(run.stage, run.status),
+    // The raw error (stack traces, tool names) stays in the database and server logs.
+    error: run.status === "failed" ? PUBLIC_ERROR : undefined,
+    request: run.request ? { url: run.request.url, mode: run.request.mode, posts: run.request.posts } : undefined,
+    progress: publicProgress(run.progress),
     created_at: run.created_at.toISOString(),
     finished_at: run.finished_at?.toISOString(),
   };
@@ -124,8 +144,7 @@ export async function dbGetRun(id: string): Promise<RunJobResponse | null> {
 
   const posts = await pool().query<PostRow>(
     `SELECT card_id, status, voice, linkedin, instagram_caption, hashtags, poster_headline,
-            poster_kicker, poster_stat, slides, fact, sources, notes, problems, attempts,
-            slide_urls, pdf_url
+            poster_kicker, poster_stat, slides, fact, sources, slide_urls, pdf_url
        FROM posts WHERE run_id = $1 ORDER BY position`,
     [run.id],
   );
@@ -133,7 +152,14 @@ export async function dbGetRun(id: string): Promise<RunJobResponse | null> {
   const cards: PostCard[] = posts.rows.map((p) => ({
     id: p.card_id,
     status: p.status,
-    fact: p.fact,
+    fact: {
+      headline: p.fact?.headline ?? "",
+      category: p.fact?.category,
+      quote: p.fact?.quote ?? "",
+      metrics: p.fact?.metrics ?? [],
+      named_entities: p.fact?.named_entities ?? [],
+      why_it_matters: p.fact?.why_it_matters,
+    },
     post: p.linkedin
       ? {
           voice: p.voice ?? undefined,
@@ -146,10 +172,7 @@ export async function dbGetRun(id: string): Promise<RunJobResponse | null> {
           slides: p.slides,
         }
       : null,
-    sources: p.sources,
-    attempts: p.attempts,
-    problems: p.problems,
-    notes: p.notes,
+    sources: (p.sources ?? []).map((src) => ({ url: src.url, title: src.title, date: src.date })),
     slide_urls: p.slide_urls,
     pdf_url: p.pdf_url ?? undefined,
   }));

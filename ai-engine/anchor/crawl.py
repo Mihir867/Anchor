@@ -10,7 +10,9 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import os
 import re
+import sys
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
@@ -95,11 +97,56 @@ class CrawlResult:
     screenshot_path: str | None = None
 
 
+# Browsers installed inside the project dir survive from build to runtime on hosts like Render,
+# where ~/.cache (Playwright's default) is not carried over. render-build.sh installs here.
+_LOCAL_BROWSERS = Path(__file__).resolve().parent.parent / ".playwright"
+if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ and (_LOCAL_BROWSERS.is_dir() or sys.platform.startswith("linux")):
+    os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(_LOCAL_BROWSERS)
+
+_LINUX_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+_install_tried = False
+
+
+def _missing_browser(err: Exception) -> bool:
+    msg = str(err).lower()
+    return "executable doesn't exist" in msg or "playwright install" in msg
+
+
+async def _install_chromium() -> None:
+    log.warning("Playwright chromium missing; installing into %s", os.environ.get("PLAYWRIGHT_BROWSERS_PATH", "default path"))
+    proc = await asyncio.create_subprocess_exec(
+        sys.executable, "-m", "playwright", "install", "chromium",
+        stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.STDOUT,
+    )
+    out, _ = await proc.communicate()
+    if proc.returncode != 0:
+        log.error("playwright install chromium failed (%s): %s", proc.returncode, out.decode(errors="replace")[-2000:])
+
+
 async def _launch(p):
+    args = _LINUX_ARGS if sys.platform.startswith("linux") else []
     try:
-        return await p.chromium.launch(headless=True)
-    except Exception:
-        return await p.chromium.launch(headless=True, channel="chrome")
+        return await p.chromium.launch(headless=True, args=args)
+    except Exception as err:
+        if not _missing_browser(err):
+            raise
+    # Bundled chromium is missing (not installed at build time): install it once per process, retry.
+    global _install_tried
+    if not _install_tried:
+        _install_tried = True
+        await _install_chromium()
+    try:
+        return await p.chromium.launch(headless=True, args=args)
+    except Exception as err:
+        if sys.platform == "darwin":  # local dev: fall back to an installed Google Chrome
+            try:
+                return await p.chromium.launch(headless=True, channel="chrome")
+            except Exception:
+                pass
+        raise RuntimeError(
+            "Chromium is not available for Playwright. Run `python -m playwright install chromium` "
+            "during the build (see render-build.sh)."
+        ) from err
 
 
 async def _goto(page, url: str) -> None:

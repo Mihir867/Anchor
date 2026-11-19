@@ -13,7 +13,8 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Install Playwright chromium browser
+# Install Playwright chromium browser (fixed path; anchor/crawl.py honours PLAYWRIGHT_BROWSERS_PATH)
+ENV PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 RUN playwright install chromium
 
 # Copy application code

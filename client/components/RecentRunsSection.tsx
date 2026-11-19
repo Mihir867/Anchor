@@ -72,7 +72,7 @@ export function RecentRunsSection({ onSelectRun, onAttach, selectedTaskId, activ
       <div className="flex items-end justify-between mb-6">
         <div>
           <h2 className="text-2xl font-semibold tracking-tight">Library</h2>
-          <p className="text-sm text-muted mt-1">Every run is saved here, including ones still in progress.</p>
+          <p className="text-sm text-muted mt-1">Everything you&rsquo;ve created, in one place.</p>
         </div>
         <button
           type="button"
@@ -98,7 +98,7 @@ export function RecentRunsSection({ onSelectRun, onAttach, selectedTaskId, activ
       ) : runs.length === 0 ? (
         <div className="p-10 rounded-2xl bg-surface border border-dashed border-line-strong text-center">
           <div className="font-medium">Nothing here yet</div>
-          <p className="text-sm text-muted mt-1">Paste a website above and your first run will show up here.</p>
+          <p className="text-sm text-muted mt-1">Paste a website above and your first posts will show up here.</p>
         </div>
       ) : (
         <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
@@ -122,10 +122,10 @@ export function RecentRunsSection({ onSelectRun, onAttach, selectedTaskId, activ
                     {running ? (
                       <span className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full bg-brand-tint text-brand-deep border border-amber-200 shrink-0">
                         <span className="w-1.5 h-1.5 rounded-full bg-brand animate-breathe" />
-                        {stage?.short || (r.status === "queued" ? "Queued" : "Running")}
+                        {stage?.short || "Creating"}
                       </span>
                     ) : r.status === "failed" ? (
-                      <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-red-50 text-bad border border-red-200 shrink-0">Failed</span>
+                      <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-sunken text-muted border border-line shrink-0">Didn&rsquo;t finish</span>
                     ) : (
                       <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-ok-tint text-ok border border-emerald-200 shrink-0">
                         {r.verified_posts} post{r.verified_posts === 1 ? "" : "s"}
@@ -136,7 +136,7 @@ export function RecentRunsSection({ onSelectRun, onAttach, selectedTaskId, activ
                 </div>
                 <div className="mt-4 flex items-center justify-between text-[12px] text-faint">
                   <span>
-                    <span className="capitalize">{r.industry || "—"}</span> · {r.mode || "fast"} · {ago(r.created_at)}
+                    {ago(r.created_at)}
                   </span>
                   <span className="text-ink-soft font-medium group-hover:text-ink">
                     {loadingId === r.id ? "Opening…" : running ? "Follow →" : r.status === "done" ? "View →" : ""}

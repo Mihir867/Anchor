@@ -99,7 +99,7 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
           failures: 0,
           phase: job.status === "done" ? "done" : "failed",
           error:
-            job.status === "failed" ? job.error || "The run failed." : null,
+            job.status === "failed" ? job.error || "Something went wrong." : null,
         }));
         if (job.status === "done" && job.result)
           onDoneRef.current?.(job.result);
@@ -166,13 +166,9 @@ export function useRunJob(onDone?: (result: RunResult) => void) {
           ...s,
           phase: "failed",
           error:
-            err instanceof TypeError
-              ? "Could not reach the Anchor engine. Is it running on " +
-                (process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000") +
-                "?"
-              : err instanceof Error
-                ? err.message
-                : String(err),
+            err instanceof Error && !(err instanceof TypeError)
+              ? err.message
+              : "We couldn't start right now. Please check your connection and try again.",
         }));
       }
     },

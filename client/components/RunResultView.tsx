@@ -48,9 +48,9 @@ export function RunResultView({ result, onClose, fresh }: RunResultViewProps) {
   if (!card) {
     return (
       <div className="rounded-3xl bg-surface border border-line p-12 text-center shadow-card">
-        <div className="text-lg font-semibold">No posts could be verified for this site</div>
+        <div className="text-lg font-semibold">We couldn&rsquo;t find enough to write about</div>
         <p className="mt-2 text-sm text-muted max-w-md mx-auto">
-          Anchor drops any post it can&rsquo;t ground in evidence. Try a page with more product, pricing or press content.
+          We only publish posts we can back up. Try a site with more about its products, customers or news.
         </p>
       </div>
     );
@@ -80,16 +80,14 @@ export function RunResultView({ result, onClose, fresh }: RunResultViewProps) {
             <div className="flex items-center gap-2 flex-wrap">
               <h3 className="text-xl font-semibold tracking-tight truncate">{brand}</h3>
               <Chip tone="ok">
-                <CheckIcon /> {verified.length} verified post{verified.length === 1 ? "" : "s"}
+                <CheckIcon /> {verified.length} post{verified.length === 1 ? "" : "s"} ready
               </Chip>
               {fresh && <Chip tone="brand">Just generated</Chip>}
             </div>
             <div className="text-[13px] text-muted mt-0.5 flex items-center gap-1.5 flex-wrap">
               {domain && <span>{domain}</span>}
-              {domain && <Dot />}
-              <span className="capitalize">{result.industry} playbook</span>
-              <Dot />
-              <span className="capitalize">{result.mode} mode</span>
+              {domain && result.industry && result.industry !== "general" && <Dot />}
+              {result.industry && result.industry !== "general" && <span className="capitalize">{result.industry}</span>}
             </div>
           </div>
         </div>
@@ -123,7 +121,7 @@ export function RunResultView({ result, onClose, fresh }: RunResultViewProps) {
       </div>
 
       <div className="grid lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
-        {/* Left: posts, copy, evidence */}
+        {/* Left: posts, copy, sources */}
         <aside className="border-b lg:border-b-0 lg:border-r border-line p-5 sm:p-6 space-y-7 bg-surface">
           <section>
             <SectionLabel>Posts</SectionLabel>
@@ -157,11 +155,11 @@ export function RunResultView({ result, onClose, fresh }: RunResultViewProps) {
                       <div className="text-[14px] font-medium leading-snug mt-0.5 line-clamp-2">{c.fact.headline}</div>
                     </div>
                     {c.status === "verified" ? (
-                      <span className="text-ok mt-0.5" title="Verified against sources">
+                      <span className="text-ok mt-0.5" title="Backed by sources">
                         <CheckIcon className="w-4 h-4" />
                       </span>
                     ) : (
-                      <span className="text-bad text-xs mt-0.5" title="Not verified">
+                      <span className="text-bad text-xs mt-0.5" title="Draft">
                         ✗
                       </span>
                     )}
@@ -194,30 +192,21 @@ export function RunResultView({ result, onClose, fresh }: RunResultViewProps) {
           </section>
 
           <section>
-            <SectionLabel>Why it&rsquo;s true</SectionLabel>
+            <SectionLabel>Sources</SectionLabel>
             <blockquote className="text-[13px] leading-relaxed text-ink-soft border-l-2 border-brand pl-3 py-0.5">
               &ldquo;{card.fact.quote}&rdquo;
             </blockquote>
             <div className="mt-3 space-y-2">
-              {(card.sources || []).map((s) => (
+              {(card.sources || []).map((s, i) => (
                 <a
-                  key={s.id}
+                  key={`${s.url}-${i}`}
                   href={s.url}
                   target="_blank"
                   rel="noreferrer"
                   className="group block p-3 rounded-xl border border-line hover:border-line-strong hover:bg-sunken/40 transition-colors"
                 >
-                  <div className="flex items-center gap-2 text-[11px] text-muted">
-                    <span className="font-mono font-semibold text-brand-deep">{s.id}</span>
-                    <span className="uppercase tracking-wide">{s.kind || "source"}</span>
-                    {s.date && (
-                      <>
-                        <Dot />
-                        <span>{s.date}</span>
-                      </>
-                    )}
-                  </div>
-                  <div className="text-[13px] font-medium mt-1 line-clamp-2 group-hover:underline">{s.title || s.url}</div>
+                  {s.date && <div className="text-[11px] text-muted">{s.date}</div>}
+                  <div className="text-[13px] font-medium line-clamp-2 group-hover:underline">{s.title || s.url}</div>
                   <div className="text-[12px] text-faint truncate mt-0.5">{s.url.replace(/^https?:\/\//, "")}</div>
                 </a>
               ))}

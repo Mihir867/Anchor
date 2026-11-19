@@ -18,6 +18,7 @@ htmlcov/
 
 # Local Engine Runs & Outputs (to be persisted in DB / Cloud Storage later)
 ai-engine/runs/
+ai-engine/.playwright/
 
 # Node.js & Frontend dependencies
 node_modules/

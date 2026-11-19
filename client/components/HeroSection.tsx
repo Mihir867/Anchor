@@ -39,7 +39,7 @@ export function HeroSection({ onStart, busy }: HeroSectionProps) {
         <svg className="w-3.5 h-3.5 text-brand" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
           <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
         </svg>
-        Social posts that cite their sources
+        Social posts, ready to publish
       </div>
 
       <h1 className="relative max-w-4xl text-center text-[44px] leading-[1.04] sm:text-6xl md:text-7xl font-semibold tracking-[-0.04em] text-ink">
@@ -49,8 +49,8 @@ export function HeroSection({ onStart, busy }: HeroSectionProps) {
       </h1>
 
       <p className="relative max-w-xl text-center text-base sm:text-lg text-muted leading-relaxed mt-5 mb-10">
-        Paste a company website. Anchor reads the site and its press coverage, then writes LinkedIn and Instagram carousels where
-        every claim traces back to a source.
+        Paste your website. Get on-brand LinkedIn posts and Instagram carousels, written from your real wins and backed by
+        sources you can check.
       </p>
 
       <div className="relative w-full max-w-2xl z-10">
@@ -65,12 +65,11 @@ export function HeroSection({ onStart, busy }: HeroSectionProps) {
                     type="button"
                     disabled={busy}
                     onClick={() => setMode(m)}
-                    title={m === "fast" ? "One rollout, about 1–3 minutes" : "Harness² refinement, several minutes"}
                     className={`h-7 px-3 rounded-full transition-all cursor-pointer disabled:cursor-default ${
                       mode === m ? "bg-surface text-ink shadow-card" : "text-muted hover:text-ink"
                     }`}
                   >
-                    {m === "fast" ? "Fast" : "Refine"}
+                    {m === "fast" ? "Standard" : "Enhanced"}
                   </button>
                 ))}
               </div>
@@ -78,10 +77,10 @@ export function HeroSection({ onStart, busy }: HeroSectionProps) {
                 value={industry}
                 disabled={busy}
                 onChange={(e) => setIndustry(e.target.value)}
-                aria-label="Industry playbook"
+                aria-label="Industry"
                 className="h-8 bg-sunken text-muted hover:text-ink text-[12px] font-medium rounded-full pl-3 pr-2 border border-line outline-none cursor-pointer focus-visible:ring-2 focus-visible:ring-amber-200"
               >
-                <option value="auto">Auto-detect industry</option>
+                <option value="auto">Any industry</option>
                 <option value="saas">SaaS</option>
                 <option value="hospitality">Hospitality</option>
                 <option value="ecommerce">E-commerce</option>
@@ -89,7 +88,7 @@ export function HeroSection({ onStart, busy }: HeroSectionProps) {
               </select>
             </div>
 
-            <PromptInputAction tooltip="Generate verified posts">
+            <PromptInputAction tooltip="Create posts">
               <button
                 type="button"
                 onClick={submit}
@@ -102,11 +101,11 @@ export function HeroSection({ onStart, busy }: HeroSectionProps) {
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                     </svg>
-                    Generating
+                    Creating
                   </>
                 ) : (
                   <>
-                    Generate
+                    Create posts
                     <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
                       <path d="M5 12h14M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>

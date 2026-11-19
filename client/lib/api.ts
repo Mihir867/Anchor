@@ -1,15 +1,12 @@
-export const API_BASE =
-  process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
-
-/** Absolute URL for an asset: Cloudinary URLs pass through, same-origin /api/ routes stay
- * relative, and engine paths (/static/runs/..., /runs/...) are served by the engine. */
+/** URL for an asset: CDN URLs pass through, same-origin /api/ routes stay relative, and
+ * anything else is streamed through /api/media so the browser never talks to the engine. */
 export function assetUrl(u: string): string {
   if (/^https?:\/\//.test(u) || u.startsWith("/api/")) return u;
-  return `${API_BASE}${u.startsWith("/") ? "" : "/"}${u}`;
+  return `/api/media/${u.replace(/^\/?(static\/runs\/)?/, "")}`;
 }
 
-// Runs are read only from Postgres via this app's /api/runs routes; the engine is used only to
-// start new runs (POST /runs), and it records every job in the database as soon as it is queued.
+// The browser only ever talks to this app's /api routes: runs are read from Postgres, and new
+// runs are started through /api/generate, which proxies to the engine server-side.
 async function fromDb<T>(path: string, timeoutMs = 12_000): Promise<T> {
   // A hung request must never stall polling: give up and let the caller retry.
   const res = await fetch(path, {
@@ -17,8 +14,7 @@ async function fromDb<T>(path: string, timeoutMs = 12_000): Promise<T> {
     signal: AbortSignal.timeout(timeoutMs),
   });
   if (!res.ok) {
-    const body = await res.text().catch(() => "");
-    throw new Error(`${path} failed (${res.status}): ${body}`);
+    throw new Error(`Request failed (${res.status})`);
   }
   return (await res.json()) as T;
 }
@@ -48,7 +44,6 @@ export interface PostCard {
   fact: {
     headline: string;
     category?: string;
-    evidence_ids: string[];
     quote: string;
     metrics: string[];
     named_entities: string[];
@@ -65,20 +60,11 @@ export interface PostCard {
     slides: SlideItem[];
   } | null;
   sources: Array<{
-    id: string;
-    kind: string;
     url: string;
     title: string;
     date: string | null;
-    text: string;
   }>;
-  attempts?: number;
-  problems?: string[];
-  notes?: string[];
-  poster_path?: string;
-  slide_paths?: string[];
-  pdf_path?: string;
-  /** From Postgres: Cloudinary (or engine-relative) URLs, cover first. */
+  /** Slide image URLs, cover first. */
   slide_urls?: string[];
   pdf_url?: string;
 }
@@ -89,17 +75,12 @@ export interface RunResult {
   industry: string;
   mode: string;
   verified_posts: number;
-  output_dir?: string;
   deck?: {
     task_id: string;
     brand: string;
     industry: string;
     cards: PostCard[];
   };
-  posters?: string[];
-  carousels?: string[];
-  poster_urls?: string[];
-  carousel_urls?: string[];
   posts_md_url?: string;
   note?: string;
   logo_url?: string;
@@ -108,16 +89,9 @@ export interface RunResult {
   domain?: string;
 }
 
-/** Live details the engine reports while a run is in flight (ai-engine/anchor/progress.py). */
+/** Live details shown while a run is in flight (a public subset; see publicProgress in db.ts). */
 export interface RunProgress {
-  url?: string;
   brand?: string;
-  industry?: string;
-  pages?: number;
-  site_evidence?: number;
-  evidence?: number;
-  news?: number;
-  facts?: number;
   post?: number;
   target?: number;
   verified?: number;
@@ -136,23 +110,8 @@ export interface RunJobResponse {
   request?: {
     url: string;
     mode: "fast" | "refine";
-    industry?: string;
     posts?: number;
   };
-}
-
-export async function checkHealth(): Promise<boolean> {
-  try {
-    const res = await fetch(`${API_BASE}/health`, {
-      cache: "no-store",
-      signal: AbortSignal.timeout(5_000),
-    });
-    if (!res.ok) return false;
-    const data = await res.json();
-    return data.status === "ok";
-  } catch {
-    return false;
-  }
 }
 
 export async function listRuns(): Promise<RunItem[]> {
@@ -170,16 +129,13 @@ export async function createRun(payload: {
   industry?: string | null;
   posts?: number;
 }): Promise<string> {
-  const res = await fetch(`${API_BASE}/runs`, {
+  const res = await fetch("/api/generate", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
-  if (!res.ok) {
-    const errorText = await res.text();
-    throw new Error(`Failed to create run (${res.status}): ${errorText}`);
-  }
-  const data = await res.json();
+  const data = (await res.json().catch(() => ({}))) as { job_id?: string; error?: string };
+  if (!res.ok || !data.job_id) throw new Error(data.error || "We couldn't start right now. Please try again.");
   return data.job_id;
 }
 

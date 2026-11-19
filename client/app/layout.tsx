@@ -10,8 +10,8 @@ const inter = Inter({
 });
 
 export const metadata: Metadata = {
-  title: "Anchor — Evidence-Grounded Brand Intelligence & Social Engine",
-  description: "Autonomous, verified brand intelligence, LinkedIn posts, and visual carousels with zero hallucinations.",
+  title: "Anchor — On-brand social posts from your website",
+  description: "Paste your website and get on-brand LinkedIn posts and Instagram carousels, backed by real sources.",
 };
 
 export default function RootLayout({
