@@ -128,7 +128,16 @@ _LOCAL_BROWSERS = Path(__file__).resolve().parent.parent / ".playwright"
 if "PLAYWRIGHT_BROWSERS_PATH" not in os.environ and (_LOCAL_BROWSERS.is_dir() or sys.platform.startswith("linux")):
     os.environ["PLAYWRIGHT_BROWSERS_PATH"] = str(_LOCAL_BROWSERS)
 
-_LINUX_ARGS = ["--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu"]
+_LINUX_ARGS = [
+    "--no-sandbox", "--disable-setuid-sandbox", "--disable-dev-shm-usage", "--disable-gpu",
+    # Memory: fewer renderer processes and no per-site process isolation. Measured on heavy home
+    # pages, this caps Chromium's spikes around 350 MB instead of ~570 MB, which is what keeps
+    # small (512 MB) instances from being OOM-killed mid-crawl.
+    "--renderer-process-limit=1", "--disable-site-isolation-trials",
+    "--disable-features=site-per-process,IsolateOrigins,Translate,MediaRouter",
+    "--disable-extensions", "--disable-background-networking", "--disable-software-rasterizer",
+    "--no-zygote",
+]
 _install_tried = False
 
 
@@ -189,8 +198,13 @@ async def crawl_home(url: str, assets_dir: Path) -> CrawlResult:
     assets_dir.mkdir(parents=True, exist_ok=True)
     async with async_playwright() as p:
         browser = await _launch(p)
+        # 1x, not 2x: a 2x render of a heavy home page peaks around 750 MB and gets the process
+        # OOM-killed on a 512 MB instance (1x: ~400 MB). Only the logo is rendered at 2x (_logo).
         ctx = await browser.new_context(viewport={"width": 1440, "height": 900}, user_agent=UA,
-                                        device_scale_factor=2)
+                                        device_scale_factor=1)
+        # Video is never used (screenshot and tokens come from the first frame/poster anyway).
+        await ctx.route("**/*", lambda route: route.abort() if route.request.resource_type == "media"
+                        else route.continue_())
         page = await ctx.new_page()
         await _goto(page, url)
         final_url = page.url
@@ -230,7 +244,9 @@ async def _logo(page, out: Path) -> str | None:
                     if (e.tagName.toLowerCase() === 'img') return {color, html: `<img src="${e.currentSrc || e.src}">`};
                     return {color, html: e.outerHTML};
                 }""")
-                iso = await page.context.new_page()
+                # A tiny separate 2x context keeps the logo crisp without rendering the page at 2x.
+                iso_ctx = await page.context.browser.new_context(device_scale_factor=2)
+                iso = await iso_ctx.new_page()
                 try:
                     w, h = int(box["width"]) + 2, int(box["height"]) + 2
                     await iso.set_content(
@@ -240,7 +256,7 @@ async def _logo(page, out: Path) -> str | None:
                     await iso.wait_for_timeout(500)
                     await (await iso.query_selector("#l")).screenshot(path=str(out), omit_background=True)
                 finally:
-                    await iso.close()
+                    await iso_ctx.close()
                 return str(out)
         except Exception:
             continue
@@ -285,7 +301,11 @@ def _sitemap(origin: str) -> list[str]:
     return []
 
 
-async def crawl_pages(urls: list[str], limit: int, concurrency: int = 4) -> list[Page]:
+# Subpages are only read for text: skipping these keeps memory low and pages fast.
+_SKIP_RESOURCES = {"image", "media", "font", "stylesheet"}
+
+
+async def crawl_pages(urls: list[str], limit: int, concurrency: int = 2) -> list[Page]:
     from playwright.async_api import async_playwright
 
     pages: list[Page] = []
@@ -293,6 +313,8 @@ async def crawl_pages(urls: list[str], limit: int, concurrency: int = 4) -> list
     async with async_playwright() as p:
         browser = await _launch(p)
         ctx = await browser.new_context(viewport={"width": 1366, "height": 900}, user_agent=UA)
+        await ctx.route("**/*", lambda route: route.abort() if route.request.resource_type in _SKIP_RESOURCES
+                        else route.continue_())
 
         async def one(u: str) -> Page | None:
             async with sem:

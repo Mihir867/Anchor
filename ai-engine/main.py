@@ -54,7 +54,9 @@ runs_dir.mkdir(parents=True, exist_ok=True)
 # Mount runs directory so posters, slides, and PDFs can be accessed directly
 app.mount("/static/runs", StaticFiles(directory=str(runs_dir)), name="runs")
 
-_pool = ThreadPoolExecutor(max_workers=int(os.environ.get("ANCHOR_WORKERS", "2")))
+# One job at a time by default: each crawl runs its own Chromium (~400 MB peak), so two at once
+# would not fit a 512 MB instance. Raise ANCHOR_WORKERS on bigger instances.
+_pool = ThreadPoolExecutor(max_workers=int(os.environ.get("ANCHOR_WORKERS", "1")))
 _jobs: dict[str, dict] = {}
 _futures: dict = {}
 
@@ -143,6 +145,12 @@ def _work(job_id: str, req: RunRequest) -> None:
         _jobs[job_id].update(status="failed", stage="failed", error=error)
         storage.flush_progress()
         storage.record_job(job_id, req.model_dump(), "failed", "failed", error)
+
+
+@app.api_route("/", methods=["GET", "HEAD"], include_in_schema=False)
+def root() -> dict:
+    """Render probes `HEAD /`; answer it instead of logging a 404 on every check."""
+    return {"status": "ok"}
 
 
 @app.get("/health")
