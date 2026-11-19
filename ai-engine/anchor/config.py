@@ -64,6 +64,8 @@ class Settings:
     harness_dir: Path = field(default_factory=lambda: Path(_env("ANCHOR_HARNESS_DIR", str(ENGINE_DIR / "harness"))))
     # Subpages rendered after the home page (most important first; see crawl.candidate_urls).
     max_pages: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_PAGES", "8")))
+    # Wall-clock seconds for rendering subpages; whatever was read by then is used.
+    subpage_budget: float = field(default_factory=lambda: float(_env("ANCHOR_SUBPAGE_BUDGET", "150")))
     max_articles: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_ARTICLES", "6")))
     repair_rounds: int = field(default_factory=lambda: int(_env("ANCHOR_REPAIR_ROUNDS", "2")))
     max_extra_posts: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_EXTRA_POSTS", "2")))

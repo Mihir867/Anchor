@@ -103,16 +103,19 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
     progress.report("crawling", brand=name, industry=industry)
 
     urls = crawl.candidate_urls(home, skill.list_meta("crawl_paths"), cfg.max_pages)
-    pages = asyncio.run(crawl.crawl_pages(urls, cfg.max_pages))
+    pages = asyncio.run(crawl.crawl_pages(urls, cfg.max_pages, budget=cfg.subpage_budget))
     site_items, extras = extract.site_evidence(home.home, pages)
     domain = urlparse(home.url).netloc.removeprefix("www.")
     progress.report("researching", pages=1 + len(pages), site_evidence=len(site_items))
     script = dominant_script(" ".join(d["text"] for d in site_items) or home_text)
+    log.info("[prepare] %d site evidence items from %d pages; searching news for %r", len(site_items),
+             1 + len(pages), name)
     news_items = research.news_evidence(name, domain, skill.list_meta("news_queries"), cfg.max_articles,
                                         script, cfg)
     intel = None
     if market.enabled(cfg):
         progress.report("researching", step="competitors")
+        log.info("[prepare] fetching DataForSEO market context for %s", domain)
         try:
             intel = market.market_intel(domain, name, cfg)
         except Exception as exc:  # market context is an enhancement; never fail a run over it

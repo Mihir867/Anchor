@@ -22,7 +22,20 @@ uv pip install --python .venv/bin/python -r requirements.txt
 .venv/bin/python run.py https://kiro.dev --refine        # Harness² Propose-Probe-Compose (~5x tokens)
 .venv/bin/python run.py https://hotel.example --industry hospitality --refine --k 2
 .venv/bin/python -m pytest tests                         # offline, no API calls
+.venv/bin/python -m pytest -m "not browser" tests        # ...minus the real-Chromium crawl tests
+scripts/test_prod_like.sh https://www.zendesk.com/in/    # crawl tests + a live crawl in the prod
+                                                         # image at 512 MB / 0.5 CPU (needs Docker)
 ```
+
+The `browser` tests (`tests/test_crawl_browser.py`) run a fresh Chromium against a local fake
+site whose subpages hang, spin JavaScript forever, 404 or show a bot wall. They check that a run
+still gets its brand kit and evidence from the good pages, in bounded time. A fresh browser
+profile is used every time, so earlier visits to a site never make them pass.
+
+The crawl is bounded end to end. Each subpage gets `PAGE_TIMEOUT` (40s). All subpages together
+get `ANCHOR_SUBPAGE_BUDGET` (150s); whatever was read by then is used. The crawl also stops after
+3 timeouts in a row, and if Chromium stops responding the Playwright driver is killed rather than
+waited on. Each subpage is logged as `[crawl] subpage n/N ok|skip <url> (reason, seconds)`.
 
 Output goes to `runs/<domain>-<timestamp>/output/`: `posts.md`, and for each post a 3-slide
 carousel (`post_N_1.png` cover with logo, title and image; `post_N_2..3.png` explainer slides;

@@ -16,6 +16,10 @@ E1 = ("Acme cut deployment time by 40% for Globex, the company said on Tuesday. 
       "Globex now ships updates to 12,000 stores from a single pipeline.")
 
 
+def pytest_configure(config):
+    config.addinivalue_line("markers", "browser: drives a real Chromium against a local test site (slow)")
+
+
 @pytest.fixture
 def cfg(tmp_path):
     # Never reach the real DataForSEO API from tests, even when .env has credentials.

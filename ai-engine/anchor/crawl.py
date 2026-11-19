@@ -12,12 +12,18 @@ import asyncio
 import logging
 import os
 import re
+import signal
+import subprocess
 import sys
+import time
+from contextlib import asynccontextmanager
 from dataclasses import dataclass, field
 from pathlib import Path
 from urllib.parse import urljoin, urlparse
 
 import httpx
+
+from . import progress
 
 log = logging.getLogger("anchor.crawl")
 
@@ -254,76 +260,150 @@ async def _launch(p):
 
 
 async def _goto(page, url: str) -> None:
-    try:  # asyncio deadline as a backstop: Playwright's own timeout can overrun on a wedged renderer
-        await asyncio.wait_for(page.goto(url, wait_until="domcontentloaded", timeout=35000), 45)
-    except asyncio.TimeoutError:
-        raise RuntimeError(f"{url}: the page did not load within 45s") from None
-    try:
-        await page.wait_for_load_state("networkidle", timeout=6000)
-    except Exception:
-        pass
+    await _deadline(page.goto(url, wait_until="domcontentloaded", timeout=35000), 45,
+                    f"{url}: the page did not load within 45s")
+    await _bounded(page.wait_for_load_state("networkidle", timeout=6000), 8, "networkidle", quiet=True)
     await page.wait_for_timeout(800)
 
 
-async def _bounded(coro, seconds: float, label: str, default=None):
-    """Await `coro` with a hard wall-clock deadline. Playwright's own timeouts live in the Node
-    driver and can overrun (or never fire) when the renderer is wedged on a heavy page; an
-    asyncio deadline always returns control to us. Optional steps fall back to `default`."""
+async def _deadline(coro, seconds: float, message: str):
+    """Await `coro`; raise RuntimeError(message) if it overruns. Playwright's own timeouts live
+    in the Node driver and can overrun (or never fire) when the renderer is wedged on a heavy
+    page; an asyncio deadline always returns control to us."""
     try:
         return await asyncio.wait_for(coro, seconds)
     except asyncio.TimeoutError:
-        log.warning("[crawl] %s took longer than %ss; skipped", label, seconds)
+        raise RuntimeError(message) from None
+
+
+async def _bounded(coro, seconds: float, label: str, default=None, quiet: bool = False):
+    """Like _deadline, for optional steps: overruns and errors are logged and `default` returned."""
+    try:
+        return await asyncio.wait_for(coro, seconds)
+    except asyncio.TimeoutError:
+        if not quiet:
+            log.warning("[crawl] %s took longer than %ss; skipped", label, seconds)
     except Exception as err:
-        log.warning("[crawl] %s failed (%s); skipped", label, (str(err).splitlines() or [type(err).__name__])[0][:200])
+        if not quiet:
+            log.warning("[crawl] %s failed (%s); skipped", label, _first_line(err))
     return default
 
 
-async def crawl_home(url: str, assets_dir: Path) -> CrawlResult:
+def _first_line(err: BaseException) -> str:
+    return (str(err).splitlines() or [type(err).__name__])[0][:200]
+
+
+async def _done(coro) -> bool:
+    await coro
+    return True
+
+
+def _child_pids(pid: int) -> list[int]:
+    """Direct children of `pid` (/proc on Linux, `ps` elsewhere). Empty if unknown."""
+    try:
+        if Path("/proc").is_dir() and sys.platform.startswith("linux"):
+            out = []
+            for d in Path("/proc").iterdir():
+                if d.name.isdigit():
+                    try:
+                        if int((d / "stat").read_text().rsplit(")", 1)[1].split()[1]) == pid:
+                            out.append(int(d.name))
+                    except (OSError, ValueError, IndexError):
+                        pass
+            return out
+        ps = subprocess.run(["ps", "-A", "-o", "pid=,ppid="], capture_output=True, text=True, timeout=5)
+        return [int(a) for a, b in (l.split() for l in ps.stdout.splitlines() if l.strip()) if int(b) == pid]
+    except Exception:
+        return []
+
+
+def _kill_driver(cm) -> None:
+    """Last resort when Playwright will not shut down: SIGKILL the Node driver and the browsers it
+    launched (each browser leads its own process group). Every in-flight Playwright call then fails
+    with TargetClosedError instead of waiting forever, and Chromium's memory is freed."""
+    proc = getattr(getattr(getattr(cm, "_client", None), "_transport", None), "_proc", None)
+    pid = getattr(proc, "pid", None)
+    if not pid:
+        return
+    for child in _child_pids(pid):
+        for kill in (lambda c: os.killpg(c, signal.SIGKILL), lambda c: os.kill(c, signal.SIGKILL)):
+            try:
+                kill(child)
+                break
+            except (OSError, PermissionError):
+                continue
+    try:
+        os.kill(pid, signal.SIGKILL)
+    except OSError:
+        pass
+    log.warning("[crawl] browser did not shut down cleanly; killed the Playwright driver (pid %s)", pid)
+
+
+@asynccontextmanager
+async def _browser(label: str):
+    """A Chromium browser whose startup and shutdown are both bounded. Leaving the block always
+    releases the browser: close politely, and if the driver is wedged, kill it."""
     from playwright.async_api import async_playwright
 
+    cm = async_playwright()
+    try:
+        pw = await _deadline(cm.start(), 60, f"{label}: the Playwright driver did not start within 60s")
+    except BaseException:
+        _kill_driver(cm)
+        raise
+    browser = None
+    try:
+        # Generous: the first launch on a fresh host may install Chromium (_launch).
+        browser = await _deadline(_launch(pw), 240, f"{label}: Chromium did not start within 240s")
+        yield browser
+    finally:
+        closed = browser is None or await _bounded(_done(browser.close()), 10, f"{label}: browser close", False)
+        stopped = closed and await _bounded(_done(pw.stop()), 15, f"{label}: Playwright shutdown", False)
+        if not stopped:
+            _kill_driver(cm)
+            await _bounded(_done(pw.stop()), 5, f"{label}: Playwright shutdown after kill", quiet=True)
+
+
+async def crawl_home(url: str, assets_dir: Path) -> CrawlResult:
     assets_dir.mkdir(parents=True, exist_ok=True)
-    async with async_playwright() as p:
-        browser = await _launch(p)
-        try:
-            # 1x, not 2x: a 2x render of a heavy home page peaks around 750 MB and gets the process
-            # OOM-killed on a 512 MB instance (1x: ~400 MB). Only the logo is rendered at 2x (_logo).
-            ctx = await browser.new_context(viewport={"width": 1440, "height": 900}, user_agent=UA,
-                                            device_scale_factor=1)
-            # Video, trackers, chat widgets and embeds are never used (screenshot and tokens come
-            # from the first frame anyway) and are the bulk of a heavy page's memory.
-            await ctx.route("**/*", _router(url, _ALWAYS_SKIP))
-            page = await ctx.new_page()
-            await _goto(page, url)
-            final_url = page.url
-            # Essential reads: bounded so a wedged renderer fails the run with a clear error
-            # instead of hanging the worker thread forever.
-            try:
-                tokens = await asyncio.wait_for(page.evaluate(TOKENS_JS), 30)
-                body_text = await asyncio.wait_for(
-                    page.evaluate("() => (document.body && document.body.innerText) || ''"), 15)
-            except asyncio.TimeoutError:
-                raise RuntimeError(f"{url}: the page stopped responding while being read") from None
-            reason = blocked_reason(tokens.get("title", ""), body_text)
-            if reason:
-                log.warning("[crawl] %s answered with a bot-protection page (%r); final url %s",
-                            url, reason, final_url)
-                raise SiteBlocked(f"{url} is behind bot protection ({reason!r}); the crawler was not let through")
-            # Logo and screenshot before HTML: _slim_html strips SVGs, CSS and attributes from
-            # the live DOM.
-            logo = await _bounded(_logo(page, assets_dir / "logo.png"), 20, "logo capture")
-            # The screenshot is only a fallback image (render.brand_images uses og:image and the
-            # site's large images first). Skip it when those exist; it is the slowest, most
-            # hang-prone step on heavy pages.
-            shot = assets_dir / "screenshot.png"
-            shot_ok = False
-            if tokens.get("og_image") or tokens.get("images"):
-                log.info("[crawl] site has its own imagery; skipping home screenshot")
-            else:
-                shot_ok = bool(await _bounded(_screenshot(page, shot), 20, "home screenshot", False))
-            html = await asyncio.wait_for(_slim_html(page), 45)
-        finally:
-            await _bounded(browser.close(), 10, "browser close")
-    log.info("[crawl] home %s: title=%r, %d chars of text", final_url, tokens.get("title", "")[:80], len(body_text))
+    t0 = time.monotonic()
+    async with _browser("home") as browser:
+        # 1x, not 2x: a 2x render of a heavy home page peaks around 750 MB and gets the process
+        # OOM-killed on a 512 MB instance (1x: ~400 MB). Only the logo is rendered at 2x (_logo).
+        ctx = await _deadline(browser.new_context(viewport={"width": 1440, "height": 900}, user_agent=UA,
+                                                  device_scale_factor=1), 30, "home: could not open a browser context")
+        # Video, trackers, chat widgets and embeds are never used (screenshot and tokens come
+        # from the first frame anyway) and are the bulk of a heavy page's memory.
+        await _deadline(ctx.route("**/*", _router(url, _ALWAYS_SKIP)), 15, "home: could not install the request filter")
+        page = await _deadline(ctx.new_page(), 30, "home: could not open a page")
+        await _goto(page, url)
+        final_url = page.url
+        log.info("[crawl] home loaded in %.1fs: %s", time.monotonic() - t0, final_url)
+        # Essential reads: bounded so a wedged renderer fails the run with a clear error
+        # instead of hanging the worker thread forever.
+        stuck = f"{url}: the page stopped responding while being read"
+        tokens = await _deadline(page.evaluate(TOKENS_JS), 30, stuck)
+        body_text = await _deadline(page.evaluate("() => (document.body && document.body.innerText) || ''"), 15, stuck)
+        reason = blocked_reason(tokens.get("title", ""), body_text)
+        if reason:
+            log.warning("[crawl] %s answered with a bot-protection page (%r); final url %s",
+                        url, reason, final_url)
+            raise SiteBlocked(f"{url} is behind bot protection ({reason!r}); the crawler was not let through")
+        # Logo and screenshot before HTML: _slim_html strips SVGs, CSS and attributes from
+        # the live DOM.
+        logo = await _bounded(_logo(page, assets_dir / "logo.png"), 20, "logo capture")
+        # The screenshot is only a fallback image (render.brand_images uses og:image and the
+        # site's large images first). Skip it when those exist; it is the slowest, most
+        # hang-prone step on heavy pages.
+        shot = assets_dir / "screenshot.png"
+        shot_ok = False
+        if tokens.get("og_image") or tokens.get("images"):
+            log.info("[crawl] site has its own imagery; skipping home screenshot")
+        else:
+            shot_ok = bool(await _bounded(_screenshot(page, shot), 20, "home screenshot", False))
+        html = await _deadline(_slim_html(page), 45, stuck)
+    log.info("[crawl] home %s: title=%r, %d chars of text (%.1fs)", final_url, tokens.get("title", "")[:80],
+             len(body_text), time.monotonic() - t0)
     return CrawlResult(
         url=final_url, home=Page(final_url, html, tokens.get("title", "")), tokens=tokens,
         logo_path=logo, screenshot_path=str(shot) if shot_ok else None,
@@ -369,7 +449,7 @@ async def _logo(page, out: Path) -> str | None:
                     await iso.wait_for_timeout(500)
                     await (await iso.query_selector("#l")).screenshot(path=str(out), omit_background=True)
                 finally:
-                    await iso_ctx.close()
+                    await _bounded(iso_ctx.close(), 5, "logo context close", quiet=True)
                 return str(out)
         except Exception:
             continue
@@ -413,6 +493,9 @@ def candidate_urls(result: CrawlResult, priority_paths: list[str], limit: int) -
     return ordered
 
 
+SITEMAP_SECONDS = 15  # wall clock: httpx's timeout is per read, so a trickling server never trips it
+
+
 def _sitemap(origin: str) -> list[str]:
     """First 300 <loc> URLs. Streamed and capped: some sitemaps are tens of megabytes."""
     try:
@@ -421,9 +504,10 @@ def _sitemap(origin: str) -> list[str]:
             if r.status_code != 200:
                 return []
             buf = bytearray()
+            stop_at = time.monotonic() + SITEMAP_SECONDS
             for chunk in r.iter_bytes():
                 buf += chunk
-                if len(buf) >= 2_000_000:
+                if len(buf) >= 2_000_000 or time.monotonic() > stop_at:
                     break
         return re.findall(r"<loc>\s*([^<]+?)\s*</loc>", buf.decode("utf-8", errors="replace"))[:300]
     except httpx.HTTPError:
@@ -431,51 +515,105 @@ def _sitemap(origin: str) -> list[str]:
     return []
 
 
-async def crawl_pages(urls: list[str], limit: int, concurrency: int | None = None) -> list[Page]:
-    """Render subpages for their text only. One page at a time by default: on small instances a
+PAGE_TIMEOUT = 40  # seconds for one subpage, end to end
+_MAX_STALLS = 3   # consecutive subpage timeouts = the renderer is wedged; stop early
+
+
+async def crawl_pages(urls: list[str], limit: int, concurrency: int | None = None,
+                      budget: float | None = None) -> list[Page]:
+    """Render subpages for their text only, within a wall-clock `budget` (seconds).
+
+    Subpages are an enhancement: whatever is collected when the budget runs out (or the browser
+    wedges) is returned, never an error. One page at a time by default: on small instances a
     second concurrent page roughly doubles Chromium's heap (ANCHOR_CRAWL_CONCURRENCY raises it)."""
-    from playwright.async_api import async_playwright
-
-    pages: list[Page] = []
+    queue = list(dict.fromkeys(urls))[: limit + 4]
+    if not queue or limit <= 0:
+        return []
     concurrency = concurrency or max(1, int(os.environ.get("ANCHOR_CRAWL_CONCURRENCY", "1") or 1))
-    sem = asyncio.Semaphore(concurrency)
-    async with async_playwright() as p:
-        browser = await _launch(p)
-        ctx = await browser.new_context(viewport={"width": 1366, "height": 900}, user_agent=UA)
-        await ctx.route("**/*", _router(urls[0] if urls else "", _SUBPAGE_SKIP))
+    budget = budget or float(os.environ.get("ANCHOR_SUBPAGE_BUDGET", "150") or 150)
+    total = len(queue)
+    pages: list[Page] = []
+    state = {"tried": 0, "stalls": 0}
+    loop = asyncio.get_running_loop()
+    t0 = loop.time()
+    deadline = t0 + budget
+    log.info("[crawl] rendering up to %d subpages from %d candidates (budget %.0fs)", limit, total, budget)
 
-        async def read(pg, u: str) -> Page | None:
-            resp = await pg.goto(u, wait_until="domcontentloaded", timeout=25000)
-            if not resp or resp.status >= 400:
-                return None
-            await pg.wait_for_timeout(900)
-            title = await pg.title()
-            text = await pg.evaluate("() => (document.body && document.body.innerText) || ''")
-            if blocked_reason(title, text):
-                log.info("skip %s: bot-protection page", u)
-                return None
-            return Page(pg.url, await _slim_html(pg), title)
+    try:
+        async with _browser("subpages") as browser:
+            ctx = await _deadline(browser.new_context(viewport={"width": 1366, "height": 900}, user_agent=UA),
+                                  30, "subpages: could not open a browser context")
+            await _deadline(ctx.route("**/*", _router(queue[0], _SUBPAGE_SKIP)), 15,
+                            "subpages: could not install the request filter")
 
-        async def one(u: str) -> Page | None:
-            async with sem:
-                if len(pages) >= limit:  # enough pages already: skip the spare candidates
-                    return None
-                pg = await ctx.new_page()
+            async def read(pg, u: str) -> tuple[Page | None, str]:
+                resp = await pg.goto(u, wait_until="domcontentloaded", timeout=PAGE_TIMEOUT * 1000)
+                if not resp or resp.status >= 400:
+                    return None, f"HTTP {resp.status if resp else 'no response'}"
+                await pg.wait_for_timeout(900)
+                title = await pg.title()
+                text = await pg.evaluate("() => (document.body && document.body.innerText) || ''")
+                if blocked_reason(title, text):
+                    return None, "bot-protection page"
+                return Page(pg.url, await _slim_html(pg), title), f"{len(text)} chars"
+
+            async def one(u: str) -> None:
+                state["tried"] += 1
+                n, started = state["tried"], loop.time()
+                window = min(PAGE_TIMEOUT + 10, deadline - started)
+                pg, got, stalled = None, None, False
                 try:
-                    # Hard per-page deadline: one wedged subpage must not hang the whole run.
-                    got = await asyncio.wait_for(read(pg, u), 50)
-                    if got and len(pages) < limit and all(got.url != x.url for x in pages):
-                        pages.append(got)
-                    return got
+                    pg = await asyncio.wait_for(ctx.new_page(), min(15, window))
+                    got, note = await asyncio.wait_for(read(pg, u), max(1, window - (loop.time() - started)))
+                except asyncio.TimeoutError:
+                    note, stalled = "timed out", True
                 except Exception as exc:
-                    log.info("skip %s: %s", u, (str(exc).splitlines() or [type(exc).__name__])[0][:200])
-                    return None
+                    # Playwright's own TimeoutError (goto timeout) is a stall too.
+                    stalled = type(exc).__name__ == "TimeoutError"
+                    note = "timed out" if stalled else _first_line(exc)
                 finally:
-                    await _bounded(pg.close(), 5, f"close {u}")
+                    if pg is not None:
+                        await _bounded(pg.close(), 5, f"close {u}", quiet=True)
+                state["stalls"] = state["stalls"] + 1 if stalled else 0
+                kept = bool(got and len(pages) < limit and all(got.url != x.url for x in pages))
+                if kept:
+                    pages.append(got)
+                log.info("[crawl] subpage %d/%d %s %s (%s, %.1fs)", n, total, "ok  " if kept else "skip",
+                         u, note if got is None or kept else "duplicate", loop.time() - started)
+                # Live progress for the client; raises progress.Cancelled when the job is stopped.
+                progress.report("crawling", subpages=len(pages))
 
-        try:
-            await asyncio.gather(*(one(u) for u in urls[: limit + 4]))
-        finally:
-            await _bounded(browser.close(), 10, "browser close")
-    log.info("Rendered %d subpages", len(pages))
+            async def worker() -> None:
+                while queue and len(pages) < limit:
+                    if deadline - loop.time() < 5:
+                        log.warning("[crawl] subpage budget of %.0fs used up; continuing with %d page(s)",
+                                    budget, len(pages))
+                        return
+                    if state["stalls"] >= _MAX_STALLS:
+                        log.warning("[crawl] %d subpages in a row timed out; the browser looks stuck, "
+                                    "continuing with %d page(s)", state["stalls"], len(pages))
+                        return
+                    await one(queue.pop(0))
+
+            # asyncio.wait, not gather/wait_for: it returns at the deadline even if a task is stuck
+            # in a Playwright call that ignores cancellation. Leaving _browser() then kills the
+            # driver, which fails those calls and lets the tasks finish.
+            tasks = [asyncio.create_task(worker()) for _ in range(concurrency)]
+            done, pending = await asyncio.wait(tasks, timeout=budget + PAGE_TIMEOUT)
+            for t in pending:
+                t.cancel()
+            if pending:
+                log.warning("[crawl] subpage rendering overran its budget; stopping it")
+                await asyncio.wait(pending, timeout=5)
+            for t in done:
+                if not t.cancelled() and isinstance(t.exception(), progress.Cancelled):
+                    raise t.exception()
+                if not t.cancelled() and t.exception():
+                    log.warning("[crawl] subpage worker failed: %s", _first_line(t.exception()))
+    except progress.Cancelled:
+        raise
+    except Exception as exc:  # browser could not start, or died: subpages are optional
+        log.warning("[crawl] subpage rendering stopped early (%s); continuing with %d page(s)",
+                    _first_line(exc), len(pages))
+    log.info("Rendered %d subpages in %.1fs", len(pages), loop.time() - t0)
     return pages
