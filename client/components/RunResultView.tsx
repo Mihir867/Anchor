@@ -1,429 +1,393 @@
 "use client";
 
-import React, { useState } from "react";
-import { PostCard, RunResult, API_BASE } from "@/lib/api";
+import React, { useEffect, useState } from "react";
+import { PostCard, RunResult, assetUrl } from "@/lib/api";
+import { LinkedInApp, LinkedInPost } from "./previews/LinkedInPost";
+import { InstagramPost } from "./previews/InstagramPost";
+import { BrandAvatar, handleFor } from "./previews/shared";
 
 interface RunResultViewProps {
   result: RunResult;
   onClose?: () => void;
+  /** Briefly celebrate a run that just finished. */
+  fresh?: boolean;
 }
 
-export function RunResultView({ result, onClose }: RunResultViewProps) {
+type Platform = "linkedin" | "instagram";
+
+const tag = (h: string) => (h.startsWith("#") ? h : `#${h}`);
+
+function withTags(text: string | undefined, tags: string[]) {
+  return [text?.trim() || "", tags.join(" ")].filter(Boolean).join("\n\n");
+}
+
+export function RunResultView({ result, onClose, fresh }: RunResultViewProps) {
   const cards = result.deck?.cards || [];
-  const verifiedCards = cards.filter((c) => c.status === "verified");
-  const displayCards = verifiedCards.length > 0 ? verifiedCards : cards;
+  const verified = cards.filter((c) => c.status === "verified");
+  const shown = verified.length > 0 ? verified : cards;
 
-  const [selectedCardIdx, setSelectedCardIdx] = useState<number>(0);
-  const [activeTab, setActiveTab] = useState<"carousel" | "linkedin" | "instagram" | "evidence">("carousel");
-  const [activeSlideIdx, setActiveSlideIdx] = useState<number>(0);
-  const [copiedText, setCopiedText] = useState<string | null>(null);
+  const [sel, setSel] = useState(0);
+  const [platform, setPlatform] = useState<Platform>("linkedin");
+  const [device, setDevice] = useState<"desktop" | "mobile">("desktop");
+  const [copied, setCopied] = useState<string | null>(null);
 
-  const currentCard: PostCard | undefined = displayCards[selectedCardIdx];
+  useEffect(() => setSel(0), [result.task_id]);
 
-  // Derive slide image URLs for the current card
-  const getSlideImages = (card: PostCard): string[] => {
-    if (!result.task_id) return [];
-    if (card.slide_paths && card.slide_paths.length > 0) {
-      return card.slide_paths.map((p) => {
-        const filename = p.split("/").pop();
-        return `${API_BASE}/static/runs/${result.task_id}/output/${filename}`;
-      });
-    }
-    // Fallback based on card id pattern post_N_1..3.png
-    const cardNum = card.id.replace(/\D/g, "");
-    return [1, 2, 3].map(
-      (s) => `${API_BASE}/static/runs/${result.task_id}/output/post_${cardNum}_${s}.png`
-    );
+  const card: PostCard | undefined = shown[Math.min(sel, shown.length - 1)];
+  const brand = result.brand || "Brand";
+  const domain = result.domain;
+  const handle = handleFor(brand, domain);
+
+  const copy = (text: string, label: string) => {
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(label);
+      setTimeout(() => setCopied(null), 1800);
+    });
   };
 
-  const getPdfUrl = (card: PostCard): string => {
-    const cardNum = card.id.replace(/\D/g, "");
-    return `${API_BASE}/static/runs/${result.task_id}/output/post_${cardNum}_carousel.pdf`;
-  };
-
-  const currentSlideImages = currentCard ? getSlideImages(currentCard) : [];
-  const currentPdfUrl = currentCard ? getPdfUrl(currentCard) : "";
-
-  const handleCopy = (text: string, label: string) => {
-    navigator.clipboard.writeText(text);
-    setCopiedText(label);
-    setTimeout(() => setCopiedText(null), 2000);
-  };
-
-  if (!currentCard) {
+  if (!card) {
     return (
-      <div className="p-8 rounded-2xl bg-[#0c121d] border border-[#212c3d] text-center text-[#909dad]">
-        No posts found for this run.
+      <div className="rounded-3xl bg-surface border border-line p-12 text-center shadow-card">
+        <div className="text-lg font-semibold">No posts could be verified for this site</div>
+        <p className="mt-2 text-sm text-muted max-w-md mx-auto">
+          Anchor drops any post it can&rsquo;t ground in evidence. Try a page with more product, pricing or press content.
+        </p>
       </div>
     );
   }
 
-  return (
-    <div className="w-full rounded-2xl bg-[#0c121d] border border-[#212c3d] p-6 sm:p-8 space-y-6 shadow-2xl">
-      {/* Header bar */}
-      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-[#212c3d] pb-5">
-        <div>
-          <div className="flex items-center gap-3">
-            <h3 className="text-2xl font-bold text-[#f8fafc] tracking-tight">
-              {result.brand || "Brand"} Generated Output
-            </h3>
-            <span className="px-2.5 py-0.5 rounded-full text-xs font-mono font-medium bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-              {verifiedCards.length} Verified Posts
-            </span>
-          </div>
-          <p className="text-xs text-[#909dad] mt-1 font-mono">
-            Task ID: <span className="text-slate-300">{result.task_id}</span> · Industry: <span className="text-amber-400 font-semibold uppercase">{result.industry}</span> · Mode: <span className="text-slate-300">{result.mode}</span>
-          </p>
-        </div>
+  const tags = (card.post?.hashtags || []).map(tag);
+  const images = (card.slide_urls ?? []).map(assetUrl);
+  const linkedinText = withTags(card.post?.linkedin, tags);
+  const instagramText = withTags(card.post?.instagram_caption, tags);
+  const previewProps = {
+    brand,
+    handle,
+    domain,
+    logoUrl: result.logo_url,
+    brandColor: result.brand_color,
+    images,
+    title: card.post?.poster_headline || card.fact.headline,
+  };
 
-        <div className="flex items-center gap-2">
+  return (
+    <div className={`rounded-3xl bg-surface border border-line shadow-lift overflow-hidden ${fresh ? "animate-fade-up" : ""}`}>
+      {/* Header */}
+      <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 px-6 sm:px-8 py-5 border-b border-line">
+        <div className="flex items-center gap-3.5 min-w-0">
+          <BrandAvatar brand={brand} logoUrl={result.logo_url} color={result.brand_color} size={44} shape="square" />
+          <div className="min-w-0">
+            <div className="flex items-center gap-2 flex-wrap">
+              <h3 className="text-xl font-semibold tracking-tight truncate">{brand}</h3>
+              <Chip tone="ok">
+                <CheckIcon /> {verified.length} verified post{verified.length === 1 ? "" : "s"}
+              </Chip>
+              {fresh && <Chip tone="brand">Just generated</Chip>}
+            </div>
+            <div className="text-[13px] text-muted mt-0.5 flex items-center gap-1.5 flex-wrap">
+              {domain && <span>{domain}</span>}
+              {domain && <Dot />}
+              <span className="capitalize">{result.industry} playbook</span>
+              <Dot />
+              <span className="capitalize">{result.mode} mode</span>
+            </div>
+          </div>
+        </div>
+        <div className="flex items-center gap-2 shrink-0">
           {result.posts_md_url && (
             <a
-              href={`${API_BASE}${result.posts_md_url}`}
+              href={assetUrl(result.posts_md_url)}
               target="_blank"
               rel="noreferrer"
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#182232] hover:bg-[#212c3d] text-[#f8fafc] border border-[#212c3d] transition-colors cursor-pointer"
+              className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-[13px] font-medium border border-line hover:border-line-strong hover:bg-sunken transition-colors"
             >
-              <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
-              <span>Download posts.md</span>
+              Export all
             </a>
           )}
           {onClose && (
             <button
               type="button"
               onClick={onClose}
-              className="p-1.5 rounded-lg text-[#909dad] hover:text-[#f8fafc] hover:bg-[#182232] transition-colors cursor-pointer"
-              title="Close view"
+              aria-label="Close"
+              className="w-9 h-9 rounded-full flex items-center justify-center text-muted hover:text-ink hover:bg-sunken transition-colors cursor-pointer"
             >
-              <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M6 18L18 6M6 6l12 12" />
+              <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M6 18L18 6M6 6l12 12" />
               </svg>
             </button>
           )}
         </div>
       </div>
 
-      {/* Post Selector Switcher */}
-      <div className="flex flex-wrap items-center gap-2 border-b border-[#212c3d]/60 pb-4">
-        <span className="text-xs text-[#909dad] font-medium mr-2">Select Post:</span>
-        {displayCards.map((c, idx) => (
-          <button
-            key={c.id}
-            type="button"
-            onClick={() => {
-              setSelectedCardIdx(idx);
-              setActiveSlideIdx(0);
-            }}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-medium transition-all duration-150 cursor-pointer ${
-              selectedCardIdx === idx
-                ? "bg-[#f8fafc] text-[#080d16] font-semibold shadow-md"
-                : "bg-[#182232] text-[#909dad] hover:text-[#f8fafc] border border-[#212c3d]"
-            }`}
-          >
-            Post #{idx + 1} {c.status === "verified" ? "✓" : "✗"}
-          </button>
-        ))}
-      </div>
-
-      {/* Post Headline & Status Banner */}
-      <div className="p-4 rounded-xl bg-[#080d16] border border-[#212c3d] flex flex-col sm:flex-row sm:items-center justify-between gap-3">
-        <div>
-          <span className="text-[11px] font-mono uppercase text-amber-400 tracking-wider">
-            Category: {currentCard.fact.category || "Verified Insight"}
-          </span>
-          <h4 className="text-base sm:text-lg font-semibold text-[#f8fafc] mt-0.5">
-            {currentCard.fact.headline}
-          </h4>
-        </div>
-        <div className="flex items-center gap-2">
-          <span className="text-xs px-2.5 py-1 rounded bg-[#182232] text-slate-300 font-mono border border-[#212c3d]">
-            Evidence: {(currentCard.fact.evidence_ids || []).join(", ")}
-          </span>
-          <span className="text-xs px-2.5 py-1 rounded bg-emerald-500/10 text-emerald-400 font-medium border border-emerald-500/20">
-            Deterministic: PASS
-          </span>
-        </div>
-      </div>
-
-      {/* Content Navigation Tabs */}
-      <div className="flex items-center gap-2 border-b border-[#212c3d]">
-        <button
-          type="button"
-          onClick={() => setActiveTab("carousel")}
-          className={`pb-2.5 px-3 text-sm font-medium transition-colors border-b-2 cursor-pointer ${
-            activeTab === "carousel"
-              ? "border-amber-400 text-[#f8fafc]"
-              : "border-transparent text-[#909dad] hover:text-[#f8fafc]"
-          }`}
-        >
-          1080×1350 Carousel Slides
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("linkedin")}
-          className={`pb-2.5 px-3 text-sm font-medium transition-colors border-b-2 cursor-pointer ${
-            activeTab === "linkedin"
-              ? "border-amber-400 text-[#f8fafc]"
-              : "border-transparent text-[#909dad] hover:text-[#f8fafc]"
-          }`}
-        >
-          LinkedIn Copy
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("instagram")}
-          className={`pb-2.5 px-3 text-sm font-medium transition-colors border-b-2 cursor-pointer ${
-            activeTab === "instagram"
-              ? "border-amber-400 text-[#f8fafc]"
-              : "border-transparent text-[#909dad] hover:text-[#f8fafc]"
-          }`}
-        >
-          Instagram Caption
-        </button>
-        <button
-          type="button"
-          onClick={() => setActiveTab("evidence")}
-          className={`pb-2.5 px-3 text-sm font-medium transition-colors border-b-2 cursor-pointer ${
-            activeTab === "evidence"
-              ? "border-amber-400 text-[#f8fafc]"
-              : "border-transparent text-[#909dad] hover:text-[#f8fafc]"
-          }`}
-        >
-          Source Proof ({(currentCard.sources || []).length})
-        </button>
-      </div>
-
-      {/* Tab 1: Carousel Viewer */}
-      {activeTab === "carousel" && (
-        <div className="grid grid-cols-1 md:grid-cols-12 gap-8 items-start pt-2">
-          {/* Visual Slide Frame (Displays actual backend rendered PNG) */}
-          <div className="md:col-span-6 flex flex-col items-center">
-            <div className="relative w-full max-w-[380px] aspect-[4/5] rounded-xl overflow-hidden border border-[#212c3d] shadow-2xl bg-[#080d16]">
-              {currentSlideImages[activeSlideIdx] ? (
-                // eslint-disable-next-line @next/next/no-img-element
-                <img
-                  src={currentSlideImages[activeSlideIdx]}
-                  alt={`Slide ${activeSlideIdx + 1}`}
-                  className="w-full h-full object-cover"
-                  onError={(e) => {
-                    // Fallback to text visual representation if image not found
-                    (e.target as HTMLElement).style.display = "none";
-                  }}
-                />
-              ) : null}
-
-              {/* Fallback slide card in case PNG is still generating */}
-              <div className="absolute inset-0 p-6 flex flex-col justify-between pointer-events-none bg-gradient-to-b from-[#0c1424]/90 to-[#080d16]/95">
-                <div className="flex items-center justify-between">
-                  <span className="font-bold text-xs tracking-wider text-amber-400 uppercase">
-                    {result.brand}
-                  </span>
-                  <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-white/10 text-slate-200">
-                    Slide {activeSlideIdx + 1}/3
-                  </span>
-                </div>
-                <div className="my-auto space-y-3">
-                  <span className="text-xs uppercase font-mono text-amber-400">
-                    {currentCard.post?.poster_kicker || "Insight"}
-                  </span>
-                  <h4 className="text-lg sm:text-xl font-bold text-[#f8fafc] leading-tight">
-                    {activeSlideIdx === 0
-                      ? currentCard.post?.poster_headline || currentCard.fact.headline
-                      : currentCard.post?.slides?.[activeSlideIdx - 1]?.title || "Explainer"}
-                  </h4>
-                  {activeSlideIdx > 0 && currentCard.post?.slides?.[activeSlideIdx - 1]?.bullets && (
-                    <ul className="text-xs text-[#909dad] space-y-1.5 list-disc pl-4">
-                      {currentCard.post!.slides![activeSlideIdx - 1].bullets.map((b, i) => (
-                        <li key={i}>{b}</li>
-                      ))}
-                    </ul>
-                  )}
-                </div>
-                <div className="pt-2 border-t border-white/10 flex items-center justify-between text-[10px] text-[#909dad]">
-                  <span>Evidence: {(currentCard.fact.evidence_ids || []).join(", ")}</span>
-                  <span>1080×1350</span>
-                </div>
-              </div>
+      <div className="grid lg:grid-cols-[minmax(0,380px)_minmax(0,1fr)]">
+        {/* Left: posts, copy, evidence */}
+        <aside className="border-b lg:border-b-0 lg:border-r border-line p-5 sm:p-6 space-y-7 bg-surface">
+          <section>
+            <SectionLabel>Posts</SectionLabel>
+            <div className="space-y-2">
+              {shown.map((c, i) => (
+                <button
+                  key={c.id}
+                  type="button"
+                  onClick={() => setSel(i)}
+                  className={`w-full text-left p-3 rounded-2xl border transition-all cursor-pointer ${
+                    i === sel ? "border-ink bg-sunken/60 shadow-card" : "border-line hover:border-line-strong hover:bg-sunken/40"
+                  }`}
+                >
+                  <div className="flex items-start gap-3">
+                    <div className="relative w-11 h-[55px] shrink-0 rounded-md overflow-hidden bg-sunken border border-line">
+                      {c.slide_urls?.[0] && (
+                        // eslint-disable-next-line @next/next/no-img-element
+                        <img src={assetUrl(c.slide_urls[0])} alt="" className="w-full h-full object-cover" />
+                      )}
+                    </div>
+                    <div className="min-w-0 flex-1">
+                      <div className="flex items-center gap-1.5 text-[11px] font-medium text-muted uppercase tracking-wide">
+                        <span>Post {i + 1}</span>
+                        {c.fact.category && (
+                          <>
+                            <Dot />
+                            <span className="truncate">{c.fact.category}</span>
+                          </>
+                        )}
+                      </div>
+                      <div className="text-[14px] font-medium leading-snug mt-0.5 line-clamp-2">{c.fact.headline}</div>
+                    </div>
+                    {c.status === "verified" ? (
+                      <span className="text-ok mt-0.5" title="Verified against sources">
+                        <CheckIcon className="w-4 h-4" />
+                      </span>
+                    ) : (
+                      <span className="text-bad text-xs mt-0.5" title="Not verified">
+                        ✗
+                      </span>
+                    )}
+                  </div>
+                </button>
+              ))}
             </div>
+          </section>
 
-            {/* Slide Navigation Buttons */}
-            <div className="flex items-center justify-between w-full max-w-[380px] mt-4 px-2">
+          <section>
+            <SectionLabel>Copy &amp; publish</SectionLabel>
+            <div className="grid grid-cols-2 gap-2">
+              <CopyButton label="LinkedIn post" done={copied === "li"} onClick={() => copy(linkedinText, "li")} />
+              <CopyButton label="Instagram caption" done={copied === "ig"} onClick={() => copy(instagramText, "ig")} />
+            </div>
+            {tags.length > 0 && (
+              <div className="mt-3 flex flex-wrap gap-1.5">
+                {tags.map((t) => (
+                  <span key={t} className="text-[12px] px-2 py-0.5 rounded-full bg-sunken text-ink-soft border border-line">
+                    {t}
+                  </span>
+                ))}
+              </div>
+            )}
+            <div className="mt-3 flex items-center gap-2 text-[12px] text-muted">
+              <span>{card.post?.linkedin?.length ?? 0} chars on LinkedIn</span>
+              <Dot />
+              <span>{card.post?.instagram_caption?.length ?? 0} on Instagram</span>
+            </div>
+          </section>
+
+          <section>
+            <SectionLabel>Why it&rsquo;s true</SectionLabel>
+            <blockquote className="text-[13px] leading-relaxed text-ink-soft border-l-2 border-brand pl-3 py-0.5">
+              &ldquo;{card.fact.quote}&rdquo;
+            </blockquote>
+            <div className="mt-3 space-y-2">
+              {(card.sources || []).map((s) => (
+                <a
+                  key={s.id}
+                  href={s.url}
+                  target="_blank"
+                  rel="noreferrer"
+                  className="group block p-3 rounded-xl border border-line hover:border-line-strong hover:bg-sunken/40 transition-colors"
+                >
+                  <div className="flex items-center gap-2 text-[11px] text-muted">
+                    <span className="font-mono font-semibold text-brand-deep">{s.id}</span>
+                    <span className="uppercase tracking-wide">{s.kind || "source"}</span>
+                    {s.date && (
+                      <>
+                        <Dot />
+                        <span>{s.date}</span>
+                      </>
+                    )}
+                  </div>
+                  <div className="text-[13px] font-medium mt-1 line-clamp-2 group-hover:underline">{s.title || s.url}</div>
+                  <div className="text-[12px] text-faint truncate mt-0.5">{s.url.replace(/^https?:\/\//, "")}</div>
+                </a>
+              ))}
+            </div>
+          </section>
+        </aside>
+
+        {/* Right: platform preview */}
+        <section className="relative bg-sunken min-h-[640px] flex flex-col">
+          <div className="flex flex-wrap items-center justify-between gap-3 px-5 sm:px-6 pt-5">
+            <Segmented
+              value={platform}
+              onChange={(v) => setPlatform(v as Platform)}
+              options={[
+                { value: "linkedin", label: "LinkedIn", icon: <LinkedInGlyph /> },
+                { value: "instagram", label: "Instagram", icon: <InstagramGlyph /> },
+              ]}
+            />
+            {platform === "linkedin" && (
+              <Segmented
+                small
+                value={device}
+                onChange={(v) => setDevice(v as "desktop" | "mobile")}
+                options={[
+                  { value: "desktop", label: "Desktop" },
+                  { value: "mobile", label: "Mobile" },
+                ]}
+              />
+            )}
+          </div>
+
+          <div
+            className="flex-1 flex items-start justify-center px-4 py-8 bg-[radial-gradient(#e2ddd4_1px,transparent_1px)] [background-size:18px_18px]"
+            key={`${card.id}-${platform}-${device}`}
+          >
+            <div className="animate-fade-up w-full flex justify-center">
+              {platform === "linkedin" ? (
+                device === "desktop" ? (
+                  <LinkedInPost {...previewProps} text={linkedinText} />
+                ) : (
+                  <LinkedInApp {...previewProps} text={linkedinText} />
+                )
+              ) : (
+                <InstagramPost {...previewProps} text={instagramText} />
+              )}
+            </div>
+          </div>
+
+          {shown.length > 1 && (
+            <div className="flex items-center justify-center gap-3 pb-6 text-[13px] text-muted">
               <button
                 type="button"
-                onClick={() => setActiveSlideIdx((prev) => (prev > 0 ? prev - 1 : 2))}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#182232] hover:bg-[#212c3d] text-[#f8fafc] border border-[#212c3d] transition-colors cursor-pointer"
+                disabled={sel === 0}
+                onClick={() => setSel((s) => s - 1)}
+                className="h-8 px-3 rounded-full border border-line bg-surface hover:border-line-strong disabled:opacity-40 cursor-pointer disabled:cursor-default"
               >
                 ← Previous
               </button>
-
-              <div className="flex items-center gap-2">
-                {[0, 1, 2].map((idx) => (
-                  <button
-                    key={idx}
-                    type="button"
-                    onClick={() => setActiveSlideIdx(idx)}
-                    className={`h-2 rounded-full transition-all duration-200 cursor-pointer ${
-                      activeSlideIdx === idx ? "w-8 bg-[#f59e0b]" : "w-2 bg-[#212c3d] hover:bg-slate-600"
-                    }`}
-                    aria-label={`Go to slide ${idx + 1}`}
-                  />
-                ))}
-              </div>
-
+              <span className="tabular-nums">
+                Post {sel + 1} of {shown.length}
+              </span>
               <button
                 type="button"
-                onClick={() => setActiveSlideIdx((prev) => (prev < 2 ? prev + 1 : 0))}
-                className="px-3 py-1.5 rounded-lg text-xs font-medium bg-[#182232] hover:bg-[#212c3d] text-[#f8fafc] border border-[#212c3d] transition-colors cursor-pointer"
+                disabled={sel === shown.length - 1}
+                onClick={() => setSel((s) => s + 1)}
+                className="h-8 px-3 rounded-full border border-line bg-surface hover:border-line-strong disabled:opacity-40 cursor-pointer disabled:cursor-default"
               >
                 Next →
               </button>
             </div>
-          </div>
-
-          {/* Details & Download Options */}
-          <div className="md:col-span-6 space-y-5">
-            <div className="p-4 rounded-xl bg-[#080d16] border border-[#212c3d] space-y-3">
-              <h5 className="text-sm font-semibold text-[#f8fafc] flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-amber-400" />
-                Slide Structure Specifications
-              </h5>
-              <div className="space-y-2 text-xs text-[#909dad]">
-                <div>
-                  <strong className="text-slate-200">Slide 1 (Cover):</strong>{" "}
-                  {currentCard.post?.poster_headline || currentCard.fact.headline}
-                </div>
-                {currentCard.post?.slides?.map((s, idx) => (
-                  <div key={idx}>
-                    <strong className="text-slate-200">Slide {idx + 2}:</strong> {s.title}
-                    <ul className="list-disc pl-4 text-slate-400 mt-1">
-                      {(s.bullets || []).map((b, bi) => (
-                        <li key={bi}>{b}</li>
-                      ))}
-                    </ul>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div className="p-4 rounded-xl bg-[#080d16] border border-[#212c3d] flex flex-col gap-3">
-              <div className="text-xs font-medium text-[#f8fafc]">
-                Ready-to-Post LinkedIn PDF Carousel:
-              </div>
-              <p className="text-xs text-[#909dad]">
-                Upload this multi-page PDF document to LinkedIn for a high-converting swipeable feed carousel.
-              </p>
-              <a
-                href={currentPdfUrl}
-                target="_blank"
-                rel="noreferrer"
-                download
-                className="inline-flex items-center justify-center gap-2 px-4 py-2 rounded-lg text-xs font-semibold bg-[#f8fafc] text-[#080d16] hover:bg-[#e2e8f0] transition-colors cursor-pointer shadow-sm active:scale-[0.98]"
-              >
-                <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M12 10v6m0 0l-3-3m3 3l3-3m2 8H7a2 2 0 01-2-2V5a2 2 0 012-2h5.586a1 1 0 01.707.293l5.414 5.414a1 1 0 01.293.707V19a2 2 0 01-2 2z" />
-                </svg>
-                <span>Download LinkedIn Document PDF</span>
-              </a>
-            </div>
-          </div>
-        </div>
-      )}
-
-      {/* Tab 2: LinkedIn Copy */}
-      {activeTab === "linkedin" && (
-        <div className="space-y-4 pt-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-[#909dad] font-mono">
-              Length: {currentCard.post?.linkedin?.length || 0} characters (Target: 600–1800)
-            </span>
-            <button
-              type="button"
-              onClick={() => handleCopy(currentCard.post?.linkedin || "", "linkedin")}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#f8fafc] text-[#080d16] hover:bg-slate-200 transition-colors cursor-pointer"
-            >
-              {copiedText === "linkedin" ? "✓ Copied!" : "Copy LinkedIn Post"}
-            </button>
-          </div>
-
-          <div className="p-5 rounded-xl bg-[#080d16] border border-[#212c3d] text-sm text-[#f8fafc] leading-relaxed whitespace-pre-line font-sans selection:bg-amber-500/20">
-            {currentCard.post?.linkedin || "No LinkedIn copy generated."}
-          </div>
-
-          {currentCard.post?.hashtags && (
-            <div className="flex items-center gap-2 text-xs">
-              <span className="font-semibold text-slate-300">Hashtags:</span>
-              <span className="font-mono text-amber-400">
-                {(currentCard.post?.hashtags || []).map((h) => (h.startsWith("#") ? h : `#${h}`)).join(" ")}
-              </span>
-            </div>
           )}
-        </div>
-      )}
-
-      {/* Tab 3: Instagram Caption */}
-      {activeTab === "instagram" && (
-        <div className="space-y-4 pt-2">
-          <div className="flex items-center justify-between">
-            <span className="text-xs text-[#909dad] font-mono">
-              Length: {currentCard.post?.instagram_caption?.length || 0} characters
-            </span>
-            <button
-              type="button"
-              onClick={() => handleCopy(currentCard.post?.instagram_caption || "", "instagram")}
-              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold bg-[#f8fafc] text-[#080d16] hover:bg-slate-200 transition-colors cursor-pointer"
-            >
-              {copiedText === "instagram" ? "✓ Copied!" : "Copy Instagram Caption"}
-            </button>
-          </div>
-
-          <div className="p-5 rounded-xl bg-[#080d16] border border-[#212c3d] text-sm text-[#f8fafc] leading-relaxed whitespace-pre-line font-sans selection:bg-amber-500/20">
-            {currentCard.post?.instagram_caption || "No Instagram caption generated."}
-          </div>
-
-          <div className="p-3.5 rounded-xl bg-[#080d16] border border-[#212c3d] text-xs text-[#909dad]">
-            <strong>Instagram Tip:</strong> Upload the 3 rendered PNG slides as a carousel post, then paste this caption into the post description.
-          </div>
-        </div>
-      )}
-
-      {/* Tab 4: Evidence Proof */}
-      {activeTab === "evidence" && (
-        <div className="space-y-4 pt-2">
-          <div className="text-xs text-[#909dad]">
-            Every single claim in this post was verified against these cited source materials:
-          </div>
-
-          <div className="space-y-3">
-            {(currentCard.sources || []).map((s) => (
-              <div key={s.id} className="p-4 rounded-xl bg-[#080d16] border border-[#212c3d] space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="font-mono text-xs font-bold text-amber-400">[{s.id}] {(s.kind || "source").toUpperCase()}</span>
-                  <a
-                    href={s.url}
-                    target="_blank"
-                    rel="noreferrer"
-                    className="text-xs text-blue-400 hover:underline font-mono truncate max-w-xs"
-                  >
-                    {s.url}
-                  </a>
-                </div>
-
-                <div className="text-xs text-slate-300 font-medium">{s.title}</div>
-
-                <blockquote className="text-xs text-[#909dad] border-l-2 border-amber-500/60 pl-3 italic py-1 bg-[#182232]/30 rounded-r">
-                  {s.text}
-                </blockquote>
-              </div>
-            ))}
-          </div>
-
-          <div className="p-3.5 rounded-xl bg-[#080d16] border border-[#212c3d] text-xs text-slate-300">
-            <strong className="text-amber-400">Verbatim Match Span:</strong> &ldquo;{currentCard.fact.quote}&rdquo;
-          </div>
-        </div>
-      )}
+        </section>
+      </div>
     </div>
+  );
+}
+
+// ---- small pieces ------------------------------------------------------------------------
+
+function SectionLabel({ children }: { children: React.ReactNode }) {
+  return <div className="text-[11px] font-semibold uppercase tracking-[0.08em] text-faint mb-2.5">{children}</div>;
+}
+
+function Dot() {
+  return <span className="w-[3px] h-[3px] rounded-full bg-current opacity-50 shrink-0" />;
+}
+
+function Chip({ children, tone }: { children: React.ReactNode; tone: "ok" | "brand" }) {
+  const cls = tone === "ok" ? "bg-ok-tint text-ok border-emerald-200" : "bg-brand-tint text-brand-deep border-amber-200";
+  return <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[12px] font-medium border ${cls}`}>{children}</span>;
+}
+
+function CheckIcon({ className = "w-3.5 h-3.5" }: { className?: string }) {
+  return (
+    <svg className={className} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.6} strokeLinecap="round" strokeLinejoin="round">
+      <path d="M20 6L9 17l-5-5" />
+    </svg>
+  );
+}
+
+function CopyButton({ label, done, onClick }: { label: string; done: boolean; onClick: () => void }) {
+  return (
+    <button
+      type="button"
+      onClick={onClick}
+      className={`h-10 px-3 rounded-xl text-[13px] font-medium inline-flex items-center justify-center gap-1.5 transition-all cursor-pointer active:scale-[0.98] ${
+        done ? "bg-ok text-white" : "bg-ink text-white hover:bg-ink-soft"
+      }`}
+    >
+      {done ? (
+        <>
+          <CheckIcon /> Copied
+        </>
+      ) : (
+        <>
+          <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
+            <rect x="9" y="9" width="12" height="12" rx="2" />
+            <path d="M5 15V5a2 2 0 012-2h10" />
+          </svg>
+          {label}
+        </>
+      )}
+    </button>
+  );
+}
+
+function Segmented({
+  value,
+  onChange,
+  options,
+  small,
+}: {
+  value: string;
+  onChange: (v: string) => void;
+  options: { value: string; label: string; icon?: React.ReactNode }[];
+  small?: boolean;
+}) {
+  return (
+    <div className="inline-flex p-1 rounded-full bg-surface border border-line shadow-card">
+      {options.map((o) => (
+        <button
+          key={o.value}
+          type="button"
+          onClick={() => onChange(o.value)}
+          className={`inline-flex items-center gap-1.5 rounded-full font-medium transition-all cursor-pointer ${small ? "h-7 px-3 text-[12px]" : "h-8 px-4 text-[13px]"} ${
+            value === o.value ? "bg-ink text-white shadow-sm" : "text-muted hover:text-ink"
+          }`}
+        >
+          {o.icon}
+          {o.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function LinkedInGlyph() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
+      <path d="M20.45 20.45h-3.56v-5.57c0-1.33-.02-3.04-1.85-3.04-1.85 0-2.14 1.45-2.14 2.94v5.67H9.34V9h3.42v1.56h.05c.48-.9 1.64-1.85 3.37-1.85 3.6 0 4.27 2.37 4.27 5.46v6.28zM5.34 7.43a2.06 2.06 0 110-4.13 2.06 2.06 0 010 4.13zM7.12 20.45H3.56V9h3.56v11.45zM22.22 0H1.77C.79 0 0 .77 0 1.73v20.54C0 23.23.79 24 1.77 24h20.45c.98 0 1.78-.77 1.78-1.73V1.73C24 .77 23.2 0 22.22 0z" />
+    </svg>
+  );
+}
+
+function InstagramGlyph() {
+  return (
+    <svg className="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2.2} aria-hidden>
+      <rect x="2.5" y="2.5" width="19" height="19" rx="5.5" />
+      <circle cx="12" cy="12" r="4.2" />
+      <circle cx="17.4" cy="6.6" r="1.1" fill="currentColor" stroke="none" />
+    </svg>
   );
 }

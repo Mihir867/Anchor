@@ -3,108 +3,69 @@
 import React, { useEffect, useState } from "react";
 import { checkHealth } from "@/lib/api";
 
-export function Navbar() {
-  const [isOnline, setIsOnline] = useState<boolean | null>(null);
+interface NavbarProps {
+  /** Short label for a run in flight ("Writing · 1:24"); shows a pill that jumps to it. */
+  activeLabel?: string | null;
+}
+
+export function Navbar({ activeLabel }: NavbarProps) {
+  const [online, setOnline] = useState<boolean | null>(null);
 
   useEffect(() => {
-    let isMounted = true;
-    checkHealth().then((ok) => {
-      if (isMounted) setIsOnline(ok);
-    });
-    const interval = setInterval(() => {
-      checkHealth().then((ok) => {
-        if (isMounted) setIsOnline(ok);
-      });
-    }, 10000);
+    let alive = true;
+    const check = () => checkHealth().then((ok) => alive && setOnline(ok));
+    check();
+    const t = setInterval(check, 15000);
     return () => {
-      isMounted = false;
-      clearInterval(interval);
+      alive = false;
+      clearInterval(t);
     };
   }, []);
 
   return (
-    <header className="sticky top-0 z-50 w-full border-b border-[#212c3d]/80 bg-[#080d16]/85 backdrop-blur-md font-sans">
-      <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between">
-        {/* Brand Logo & Name */}
-        <a
-          href="/"
-          className="flex items-center gap-2.5 group cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded-lg p-1"
-        >
-          <div className="w-8 h-8 rounded-lg bg-[#0c121d] border border-[#212c3d] flex items-center justify-center shadow-inner group-hover:border-amber-500/50 transition-colors duration-200">
-            {/* Radiant 8-pointed celestial star SVG */}
-            <svg
-              className="w-4 h-4 text-[#f59e0b] fill-current transform group-hover:scale-105 transition-transform duration-200"
-              viewBox="0 0 24 24"
-              aria-hidden="true"
-            >
+    <header className="sticky top-0 z-50 w-full border-b border-line/80 bg-canvas/80 backdrop-blur-xl">
+      <div className="max-w-6xl mx-auto px-4 sm:px-6 h-16 flex items-center justify-between gap-4">
+        <a href="#" className="flex items-center gap-2.5 rounded-lg">
+          <span className="w-8 h-8 rounded-xl bg-ink flex items-center justify-center shadow-card">
+            <svg className="w-4 h-4 text-brand" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
               <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
             </svg>
-          </div>
-          <span className="text-[#f8fafc] font-semibold text-base sm:text-lg tracking-tight">
-            Anchor
           </span>
-          <span className="text-[10px] font-mono font-medium px-1.5 py-0.5 rounded bg-[#182232] text-[#909dad] border border-[#212c3d]">
-            v2.0
-          </span>
+          <span className="font-semibold text-[17px] tracking-tight">Anchor</span>
         </a>
 
-        {/* Center Nav Links */}
-        <nav
-          className="hidden md:flex items-center gap-7 text-sm font-medium text-[#909dad]"
-          aria-label="Main Navigation"
-        >
-          <a
-            href="#generator"
-            className="hover:text-[#f8fafc] transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded px-1"
-          >
-            Create Run
-          </a>
-          <a
-            href="#recent-runs"
-            className="hover:text-[#f8fafc] transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded px-1"
-          >
-            Run Archive
-          </a>
-          <a
-            href="#features"
-            className="hover:text-[#f8fafc] transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded px-1"
-          >
-            How it works
-          </a>
-          <a
-            href="#harness2"
-            className="hover:text-[#f8fafc] transition-colors duration-200 cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 rounded px-1"
-          >
-            Harness²
-          </a>
+        <nav className="hidden md:flex items-center gap-7 text-[14px] font-medium text-muted" aria-label="Main">
+          <a href="#generator" className="hover:text-ink transition-colors">Create</a>
+          <a href="#recent-runs" className="hover:text-ink transition-colors">Library</a>
+          <a href="#features" className="hover:text-ink transition-colors">How it works</a>
         </nav>
 
-        {/* Right Status Pill & CTA */}
-        <div className="flex items-center gap-3">
-          <div className="inline-flex items-center gap-2 text-xs font-mono text-[#909dad] bg-[#0c121d] px-2.5 py-1 rounded-full border border-[#212c3d]">
+        <div className="flex items-center gap-2.5">
+          {activeLabel ? (
+            <a
+              href="#live-run"
+              className="inline-flex items-center gap-2 h-8 pl-2.5 pr-3 rounded-full bg-brand-tint border border-amber-200 text-[12px] font-medium text-brand-deep animate-fade-up"
+            >
+              <span className="relative flex w-2 h-2">
+                <span className="absolute inset-0 rounded-full bg-brand animate-ping opacity-60" />
+                <span className="relative w-2 h-2 rounded-full bg-brand" />
+              </span>
+              <span className="tabular-nums">{activeLabel}</span>
+            </a>
+          ) : (
             <span
-              className={`w-1.5 h-1.5 rounded-full ${
-                isOnline === true
-                  ? "bg-emerald-400 animate-pulse"
-                  : isOnline === false
-                  ? "bg-rose-500"
-                  : "bg-amber-400"
-              }`}
-            />
-            <span>
-              {isOnline === true
-                ? "API :8000 Online"
-                : isOnline === false
-                ? "API Offline"
-                : "Checking API..."}
+              className="hidden sm:inline-flex items-center gap-1.5 h-8 px-3 rounded-full border border-line bg-surface text-[12px] text-muted"
+              title={online === false ? "Can't reach the engine API; new runs won't start" : "Engine API"}
+            >
+              <span className={`w-1.5 h-1.5 rounded-full ${online ? "bg-ok" : online === false ? "bg-bad" : "bg-faint"}`} />
+              {online ? "Engine online" : online === false ? "Engine offline" : "Checking…"}
             </span>
-          </div>
-
+          )}
           <a
             href="#generator"
-            className="inline-flex items-center justify-center px-4 py-1.5 rounded-full text-xs font-semibold bg-[#f8fafc] text-[#080d16] hover:bg-[#e2e8f0] active:scale-[0.98] transition-all duration-150 shadow-sm cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
+            className="inline-flex items-center h-8 px-4 rounded-full text-[13px] font-semibold bg-ink text-white hover:bg-ink-soft transition-colors"
           >
-            Launch Run
+            New run
           </a>
         </div>
       </div>

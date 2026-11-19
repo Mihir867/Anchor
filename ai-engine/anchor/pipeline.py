@@ -7,7 +7,7 @@ import logging
 import shutil
 from pathlib import Path
 
-from . import generate, render
+from . import generate, progress, render
 from .config import Settings, settings
 from . import harness as harness_mod
 from .llm import LLM, reset_usage, usage_snapshot
@@ -88,6 +88,7 @@ def finalize(pack, run_dir: Path, chosen: Path, harness_used: Path, cfg: Setting
     result = RolloutResult.model_validate_json((chosen / "cards.json").read_text(encoding="utf-8"))
     out = run_dir / "output"
     out.mkdir(parents=True, exist_ok=True)
+    progress.report("rendering", verified=len(result.verified))
     posters = render.render_all(result.verified, pack, out, cfg)
     for card in result.verified:
         names = posters[card.id]

@@ -62,3 +62,8 @@ def test_unicode_range_subset_font_is_rejected(tmp_path):
     font.save(str(path))
     assert render.covers(render.INTER["regular"]) and not render.covers(path)
     assert render.for_text(path, "Hello") == render.INTER["regular"]
+
+
+def test_text_no_font_can_draw_is_stripped_not_boxed():
+    assert render.drawable(render.INTER["regular"], "PwC本格 and JDSC") == "PwC and JDSC"
+    assert render.drawable(render.INTER["regular"], "Plain text") == "Plain text"

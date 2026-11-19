@@ -6,7 +6,11 @@ Endpoints:
     GET  /runs/{job_id}        -> Status, result summary, and full deck
     GET  /runs/{job_id}/posts.md -> Rendered markdown of verified posts
     GET  /runs/{job_id}/files/{filename} -> Direct download of posters / PDFs
-    GET  /health               -> Health check
+    GET  /health               -> Health check (+ which storage backends are configured)
+
+Storage: with DATABASE_URL set, every job is written to Postgres (queued -> running -> done/failed)
+and finished runs' slides/PDFs are uploaded to Cloudinary when CLOUDINARY_URL is set. See
+anchor/storage.py. The Next.js client reads those tables directly.
 """
 
 from __future__ import annotations
@@ -25,6 +29,7 @@ from fastapi.responses import FileResponse, PlainTextResponse
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
 
+from anchor import progress, storage
 from anchor.config import Settings, settings
 from anchor.pipeline import run
 
@@ -81,27 +86,47 @@ def _format_result(res: dict, task_id: str) -> dict:
 
 def _work(job_id: str, req: RunRequest) -> None:
     _jobs[job_id]["status"] = "running"
-    _jobs[job_id]["stage"] = "processing"
+    _jobs[job_id]["stage"] = "crawling"
+    storage.record_job(job_id, req.model_dump(), "running", "crawling")
+
+    def on_progress(stage: str, info: dict) -> None:
+        _jobs[job_id].update(stage=stage, progress=info)
+        storage.record_progress(job_id, stage, info)
+
     try:
-        raw_result = run(
-            req.url,
-            mode=req.mode,
-            k=req.k,
-            max_posts=req.posts,
-            industry=req.industry,
-            cfg=cfg,
-        )
+        with progress.reporting(on_progress):
+            raw_result = run(
+                req.url,
+                mode=req.mode,
+                k=req.k,
+                max_posts=req.posts,
+                industry=req.industry,
+                cfg=cfg,
+            )
         task_id = raw_result.get("task_id", job_id)
         formatted = _format_result(raw_result, task_id)
+        if storage.enabled():
+            on_progress("saving", {**_jobs[job_id].get("progress", {}),
+                                   "verified": raw_result.get("verified_posts")})
+            storage.flush_progress()
+            try:
+                formatted["storage"] = storage.save_run(job_id, runs_dir / task_id, req.model_dump())
+            except Exception as exc:  # the posts exist on disk; `python -m anchor.storage backfill` re-syncs
+                log.exception("job %s: saving to Postgres/Cloudinary failed", job_id)
+                formatted["storage_error"] = f"{type(exc).__name__}: {exc}"
+                storage.record_job(job_id, req.model_dump(), "done", "done", f"storage: {exc}")
         _jobs[job_id].update(status="done", stage="done", result=formatted, task_id=task_id)
     except Exception as exc:
         logging.exception("job %s failed", job_id)
-        _jobs[job_id].update(status="failed", stage="failed", error=f"{type(exc).__name__}: {exc}")
+        error = f"{type(exc).__name__}: {exc}"
+        _jobs[job_id].update(status="failed", stage="failed", error=error)
+        storage.flush_progress()
+        storage.record_job(job_id, req.model_dump(), "failed", "failed", error)
 
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "service": "Anchor AI Engine", "version": "2.0.0"}
+    return {"status": "ok", "service": "Anchor AI Engine", "version": "2.0.0", "storage": storage.status()}
 
 
 @app.get("/runs")
@@ -182,6 +207,7 @@ def create_run(req: RunRequest) -> dict:
         "request": req.model_dump(),
         "job_id": job_id,
     }
+    storage.record_job(job_id, req.model_dump(), "queued")
     _pool.submit(_work, job_id, req)
     return {"job_id": job_id, "status": "queued"}
 

@@ -83,3 +83,17 @@ def test_slides_are_held_to_the_same_grounding(pack):
     assert any("slide 2" in p and "25%" in p for p in check_post(bad, fact, [ev["E1"]], "Acme", GLOBAL_BANNED))
     short = _post(slides=[Slide(**SLIDES[0])])
     assert any("carousel needs 2 slides" in p for p in check_post(short, fact, [ev["E1"]], "Acme", GLOBAL_BANNED))
+
+
+def test_foreign_script_text_is_flagged_for_repair(pack):
+    from anchor.verify import dominant_script, foreign_text
+
+    text = "Partnerships with PwCコンサルティング, JDSC and オーアール・ラボ are 本格始動."
+    assert foreign_text(text) == ["コンサルティング", "オーアール・ラボ", "本格始動"]
+    assert foreign_text("Café Ünïcode — 98% of waste") == []
+    assert foreign_text("サービス開始 Acme", "CJK") == []
+    assert dominant_script("DevRevは国内リージョンでのサービス提供を開始した") == "CJK"
+    ev = pack.evidence_by_id()
+    fact = MinedFact(headline="h", category="c", evidence_ids=["E1"], quote="q", why_it_matters="w")
+    bad = _post(instagram_caption=CAPTION + " 本格始動")
+    assert any("another writing system" in p for p in check_post(bad, fact, [ev["E1"]], "Acme", GLOBAL_BANNED))

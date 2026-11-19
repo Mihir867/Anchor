@@ -1,72 +1,133 @@
 @import "tailwindcss";
 
-:root {
-  /* Warm slate-navy base & card surfaces (Native.no aesthetic) */
-  --background: #080d16;
-  --foreground: #f8fafc;
-  --card: #0c121d;
-  --card-foreground: #f8fafc;
-  --popover: #0c121d;
-  --popover-foreground: #f8fafc;
-  --secondary: #182232;
-  --secondary-foreground: #f8fafc;
-  --muted: #182232;
-  --muted-foreground: #909dad;
-  --border: #212c3d;
-  --border-subtle: #192230;
-  --input: #212c3d;
-  --primary: #f8fafc;
-  --primary-foreground: #080d16;
-  --accent: #f59e0b;
-  --accent-foreground: #080d16;
-  --ring: #3b82f6;
-}
-
+/* Light, warm-neutral theme. Ink for primary actions, amber as the brand accent. */
 @theme {
-  --color-background: #080d16;
-  --color-foreground: #f8fafc;
-  --color-card: #0c121d;
-  --color-card-foreground: #f8fafc;
-  --color-popover: #0c121d;
-  --color-popover-foreground: #f8fafc;
-  --color-secondary: #182232;
-  --color-secondary-foreground: #f8fafc;
-  --color-muted: #182232;
-  --color-muted-foreground: #909dad;
-  --color-border: #212c3d;
-  --color-border-subtle: #192230;
-  --color-input: #212c3d;
-  --color-primary: #f8fafc;
-  --color-primary-foreground: #080d16;
-  --color-accent: #f59e0b;
-  --color-accent-foreground: #080d16;
-  --color-ring: #3b82f6;
+  --color-canvas: #faf9f7;
+  --color-surface: #ffffff;
+  --color-sunken: #f4f2ee;
+  --color-ink: #16130f;
+  --color-ink-soft: #3d3832;
+  --color-muted: #6f6a63;
+  --color-faint: #a39e96;
+  --color-line: #e8e4dd;
+  --color-line-strong: #d6d0c6;
+  --color-brand: #f59e0b;
+  --color-brand-deep: #b45309;
+  --color-brand-tint: #fef3c7;
+  --color-ok: #059669;
+  --color-ok-tint: #ecfdf5;
+  --color-bad: #dc2626;
 
   --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
   --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  /* Social previews use each platform's own system font stack. */
+  --font-platform: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
+    "Fira Sans", Ubuntu, Oxygen, "Oxygen Sans", Cantarell, "Droid Sans", "Apple Color Emoji",
+    "Segoe UI Emoji", "Segoe UI Symbol", "Lucida Grande", Helvetica, Arial, sans-serif;
+
+  --shadow-card: 0 1px 2px rgba(22, 19, 15, 0.04), 0 4px 16px -4px rgba(22, 19, 15, 0.06);
+  --shadow-lift: 0 2px 4px rgba(22, 19, 15, 0.04), 0 18px 48px -12px rgba(22, 19, 15, 0.18);
+
+  --animate-shimmer: shimmer 1.6s linear infinite;
+  --animate-fade-up: fade-up 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  --animate-pop: pop 0.45s cubic-bezier(0.2, 1.6, 0.4, 1) both;
+  --animate-heart: heart 0.9s ease-out both;
+  --animate-breathe: breathe 2.4s ease-in-out infinite;
+
+  @keyframes shimmer {
+    from {
+      background-position: -400px 0;
+    }
+    to {
+      background-position: 400px 0;
+    }
+  }
+  @keyframes fade-up {
+    from {
+      opacity: 0;
+      transform: translateY(8px);
+    }
+    to {
+      opacity: 1;
+      transform: none;
+    }
+  }
+  @keyframes pop {
+    0% {
+      transform: scale(1);
+    }
+    40% {
+      transform: scale(1.25);
+    }
+    100% {
+      transform: scale(1);
+    }
+  }
+  @keyframes heart {
+    0% {
+      opacity: 0;
+      transform: scale(0.2);
+    }
+    15% {
+      opacity: 1;
+      transform: scale(1.2);
+    }
+    30% {
+      transform: scale(0.95);
+    }
+    45%,
+    80% {
+      opacity: 1;
+      transform: scale(1);
+    }
+    100% {
+      opacity: 0;
+      transform: scale(1) translateY(-12px);
+    }
+  }
+  @keyframes breathe {
+    0%,
+    100% {
+      opacity: 0.55;
+    }
+    50% {
+      opacity: 1;
+    }
+  }
+}
+
+html {
+  scroll-behavior: smooth;
 }
 
 body {
-  background-color: var(--background);
-  color: var(--foreground);
+  background-color: var(--color-canvas);
+  color: var(--color-ink);
   font-family: var(--font-sans);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
-/* Enforce Inter across all typography */
-h1,
-h2,
-h3,
-h4,
-h5,
-h6,
-p,
-span,
-button,
-input,
-textarea,
-select {
-  font-family: var(--font-sans);
+.skeleton {
+  background: linear-gradient(90deg, #efebe5 0px, #f8f6f2 120px, #efebe5 240px);
+  background-size: 800px 100%;
+  animation: var(--animate-shimmer);
+}
+
+.no-scrollbar {
+  scrollbar-width: none;
+}
+.no-scrollbar::-webkit-scrollbar {
+  display: none;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+  }
 }

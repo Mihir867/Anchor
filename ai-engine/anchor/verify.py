@@ -34,6 +34,55 @@ _PLACEHOLDER = re.compile(r"\[[^\]]{0,40}\]|\{[^}]{0,40}\}|\bTBD\b|lorem ipsum|\
 _EMOJI = re.compile("[\U0001F300-\U0001FAFF☀-➿]")
 
 
+_KANA_HAN = ("CJK", "HIRAGANA", "KATAKANA", "HALFWIDTH", "IDEOGRAPHIC", "KANGXI", "BOPOMOFO")
+
+
+def script_of(ch: str) -> str | None:
+    """Writing system of one letter ('LATIN', 'CJK', 'HANGUL', 'CYRILLIC', ...); None for
+    digits, punctuation, symbols and spaces, which every script shares."""
+    if not ch.isalpha():
+        return None
+    name = unicodedata.name(ch, "")
+    if not name:
+        return None
+    if name.startswith("FULLWIDTH LATIN"):
+        return "LATIN"
+    if name.startswith("HALFWIDTH HANGUL"):
+        return "HANGUL"
+    first = name.split(" ", 1)[0]
+    return "CJK" if first.startswith(_KANA_HAN) else first
+
+
+def dominant_script(text: str, default: str = "LATIN") -> str:
+    counts: dict[str, int] = {}
+    for ch in text or "":
+        s = script_of(ch)
+        if s:
+            counts[s] = counts.get(s, 0) + 1
+    return max(counts, key=counts.get) if counts else default
+
+
+def foreign_text(text: str, script: str = "LATIN") -> list[str]:
+    """Runs of letters in a writing system other than `script` (Latin is always allowed: brand
+    and product names are Latin everywhere). These are what render as box glyphs on a poster
+    and read as gibberish to the post's audience."""
+    allowed = {script, "LATIN"}
+    runs, cur = [], ""
+    for ch in text or "":
+        s = script_of(ch)
+        if s and s not in allowed:
+            cur += ch
+        elif cur and (s is None and not ch.isspace()):
+            cur += ch  # keep 'オーアール・ラボ' as one run
+        else:
+            if cur:
+                runs.append(cur.strip("・、。,.;: "))
+            cur = ""
+    if cur:
+        runs.append(cur.strip("・、。,.;: "))
+    return [r for r in dict.fromkeys(runs) if r]
+
+
 def norm(text: str) -> str:
     text = unicodedata.normalize("NFKC", text or "").translate(_TRANSLATE).lower()
     return re.sub(r"\s+", " ", text).strip()
@@ -127,7 +176,7 @@ def normalize_post(post: PostDraft, fact: MinedFact, detail_slides: int = 2) -> 
 
 
 def check_post(post: PostDraft, fact: MinedFact, sources: list[Evidence], brand_name: str,
-               banned: list[str], detail_slides: int = 2) -> list[str]:
+               banned: list[str], detail_slides: int = 2, script: str = "LATIN") -> list[str]:
     problems: list[str] = []
     corpus = " ".join(norm(f"{e.text} {e.title} {e.date or ''}") for e in sources) + " " + norm(brand_name)
     allowed = numbers(corpus)
@@ -137,6 +186,7 @@ def check_post(post: PostDraft, fact: MinedFact, sources: list[Evidence], brand_
         ("poster_headline", post.poster_headline),
         ("poster_kicker", post.poster_kicker),
         ("poster_stat", post.poster_stat),
+        ("hashtags", " ".join(post.hashtags)),
         *((f"slide {i} ", f"{sl.title} " + " ".join(sl.bullets)) for i, sl in enumerate(post.slides, 2)),
     ):
         missing = numbers(text) - allowed
@@ -148,6 +198,12 @@ def check_post(post: PostDraft, fact: MinedFact, sources: list[Evidence], brand_
             problems.append(f"{field_name} uses banned phrases: {hits}")
         if _PLACEHOLDER.search(text or ""):
             problems.append(f"{field_name} contains a placeholder or template token")
+        foreign = foreign_text(text, script)
+        if foreign:
+            problems.append(
+                f"{field_name} contains text in another writing system {foreign[:4]}: write the whole "
+                f"post in the brand's language ({script.title()} script) -- translate it, use the Latin "
+                "name the evidence gives, or describe it generically (e.g. 'four Japanese partners')")
 
     li = post.linkedin.strip()
     if not 400 <= len(li) <= 3000:

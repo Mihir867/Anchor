@@ -1,12 +1,34 @@
 export const API_BASE =
   process.env.NEXT_PUBLIC_API_URL || "http://localhost:8000";
 
+/** Absolute URL for an asset: Cloudinary URLs pass through, same-origin /api/ routes stay
+ * relative, and engine paths (/static/runs/..., /runs/...) are served by the engine. */
+export function assetUrl(u: string): string {
+  if (/^https?:\/\//.test(u) || u.startsWith("/api/")) return u;
+  return `${API_BASE}${u.startsWith("/") ? "" : "/"}${u}`;
+}
+
+// Runs are read only from Postgres via this app's /api/runs routes; the engine is used only to
+// start new runs (POST /runs), and it records every job in the database as soon as it is queued.
+async function fromDb<T>(path: string, timeoutMs = 12_000): Promise<T> {
+  // A hung request must never stall polling: give up and let the caller retry.
+  const res = await fetch(path, { cache: "no-store", signal: AbortSignal.timeout(timeoutMs) });
+  if (!res.ok) {
+    const body = await res.text().catch(() => "");
+    throw new Error(`${path} failed (${res.status}): ${body}`);
+  }
+  return (await res.json()) as T;
+}
+
 export interface RunItem {
   id: string;
   task_id: string;
   status: "queued" | "running" | "done" | "failed";
   brand?: string;
+  url?: string;
   industry?: string;
+  /** Live engine stage while running (crawling, researching, mining, writing, rendering, saving). */
+  stage?: string;
   verified_posts: number;
   created_at?: string;
   mode?: string;
@@ -30,6 +52,7 @@ export interface PostCard {
     why_it_matters?: string;
   };
   post?: {
+    voice?: string;
     linkedin: string;
     instagram_caption: string;
     hashtags: string[];
@@ -52,6 +75,9 @@ export interface PostCard {
   poster_path?: string;
   slide_paths?: string[];
   pdf_path?: string;
+  /** From Postgres: Cloudinary (or engine-relative) URLs, cover first. */
+  slide_urls?: string[];
+  pdf_url?: string;
 }
 
 export interface RunResult {
@@ -73,6 +99,26 @@ export interface RunResult {
   carousel_urls?: string[];
   posts_md_url?: string;
   note?: string;
+  logo_url?: string;
+  /** Brand primary color and domain from the crawled brand kit. */
+  brand_color?: string;
+  domain?: string;
+}
+
+/** Live details the engine reports while a run is in flight (ai-engine/anchor/progress.py). */
+export interface RunProgress {
+  url?: string;
+  brand?: string;
+  industry?: string;
+  pages?: number;
+  site_evidence?: number;
+  evidence?: number;
+  news?: number;
+  facts?: number;
+  post?: number;
+  target?: number;
+  verified?: number;
+  headline?: string;
 }
 
 export interface RunJobResponse {
@@ -81,6 +127,9 @@ export interface RunJobResponse {
   job_id: string;
   result?: RunResult;
   error?: string;
+  progress?: RunProgress;
+  created_at?: string;
+  finished_at?: string;
   request?: {
     url: string;
     mode: "fast" | "refine";
@@ -91,7 +140,7 @@ export interface RunJobResponse {
 
 export async function checkHealth(): Promise<boolean> {
   try {
-    const res = await fetch(`${API_BASE}/health`, { cache: "no-store" });
+    const res = await fetch(`${API_BASE}/health`, { cache: "no-store", signal: AbortSignal.timeout(5_000) });
     if (!res.ok) return false;
     const data = await res.json();
     return data.status === "ok";
@@ -102,9 +151,7 @@ export async function checkHealth(): Promise<boolean> {
 
 export async function listRuns(): Promise<RunItem[]> {
   try {
-    const res = await fetch(`${API_BASE}/runs`, { cache: "no-store" });
-    if (!res.ok) return [];
-    return await res.json();
+    return await fromDb<RunItem[]>("/api/runs");
   } catch (err) {
     console.error("Failed to list runs:", err);
     return [];
@@ -131,19 +178,5 @@ export async function createRun(payload: {
 }
 
 export async function getRun(jobId: string): Promise<RunJobResponse> {
-  const res = await fetch(`${API_BASE}/runs/${jobId}`, { cache: "no-store" });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch run ${jobId}: ${res.statusText}`);
-  }
-  return await res.json();
-}
-
-export async function getPostsMarkdown(jobId: string): Promise<string> {
-  const res = await fetch(`${API_BASE}/runs/${jobId}/posts.md`, {
-    cache: "no-store",
-  });
-  if (!res.ok) {
-    throw new Error(`Failed to fetch posts.md: ${res.statusText}`);
-  }
-  return await res.text();
+  return fromDb<RunJobResponse>(`/api/runs/${encodeURIComponent(jobId)}`);
 }

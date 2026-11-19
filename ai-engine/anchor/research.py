@@ -19,7 +19,7 @@ from bs4 import BeautifulSoup
 
 from .crawl import UA
 from .extract import clean, informativeness, prose
-from .verify import norm
+from .verify import dominant_script, norm
 
 log = logging.getLogger("anchor.research")
 
@@ -51,7 +51,7 @@ def _date(raw: str) -> str | None:
         return None
 
 
-def _article(hit: dict, brand: str, domain: str) -> list[dict]:
+def _article(hit: dict, brand: str, domain: str, script: str = "LATIN") -> list[dict]:
     try:
         r = httpx.get(hit["url"], headers={"User-Agent": UA}, timeout=12, follow_redirects=True)
         if r.status_code != 200 or "html" not in r.headers.get("content-type", ""):
@@ -67,6 +67,11 @@ def _article(hit: dict, brand: str, domain: str) -> list[dict]:
     paras = [clean(p.get_text(" ")) for p in root.find_all("p")]
     paras = [p for p in paras if prose(p, 40, 1200)]
     body = " ".join(paras)
+    if dominant_script(body, script) != script:
+        # Press in another language (e.g. a Japanese-edition article about an English-language
+        # brand): its names and dates would leak into the posts untranslated.
+        log.info("skip %s: written in %s, site is %s", hit["url"], dominant_script(body), script)
+        return []
     if norm(brand) not in norm(body) and domain.split(".")[0] not in norm(body):
         return []
     # Lead paragraph plus the most specific paragraphs, max 3 chunks per article.
@@ -77,18 +82,20 @@ def _article(hit: dict, brand: str, domain: str) -> list[dict]:
              "_rank": informativeness(c) + 2.5} for c in chunks]
 
 
-def news_evidence(brand: str, domain: str, templates: list[str], max_articles: int) -> list[dict]:
+def news_evidence(brand: str, domain: str, templates: list[str], max_articles: int,
+                  script: str = "LATIN") -> list[dict]:
     year = datetime.now().year
     queries = [t.replace("{brand_name}", brand).replace("{current_year}", str(year)) for t in templates[:3]]
     queries = queries or [f'"{brand}" (launch OR partnership OR award OR announces) {year}']
     hits, seen = [], set()
     for q in queries:
         for h in _bing(q):
-            if h["url"].startswith("http") and h["url"] not in seen and domain not in h["url"]:
+            if (h["url"].startswith("http") and h["url"] not in seen and domain not in h["url"]
+                    and dominant_script(h["title"], script) == script):
                 seen.add(h["url"])
                 hits.append(h)
     with ThreadPoolExecutor(max_workers=6) as pool:
-        results = list(pool.map(lambda h: _article(h, brand, domain), hits[: max_articles * 3]))
+        results = list(pool.map(lambda h: _article(h, brand, domain, script), hits[: max_articles * 3]))
     items: list[dict] = []
     used = 0
     for chunks in results:

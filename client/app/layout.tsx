@@ -18,8 +18,8 @@ export default function RootLayout({
   children,
 }: LayoutProps<"/">) {
   return (
-    <html lang="en" className={`${inter.variable} dark h-full antialiased`}>
-      <body className="min-h-full flex flex-col font-sans bg-background text-foreground selection:bg-amber-500/20 selection:text-amber-200">
+    <html lang="en" className={`${inter.variable} h-full antialiased`}>
+      <body className="min-h-full flex flex-col font-sans bg-canvas text-ink selection:bg-amber-200/70 selection:text-ink">
         {children}
       </body>
     </html>

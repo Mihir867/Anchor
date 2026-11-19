@@ -16,10 +16,11 @@ from urllib.parse import urlparse
 
 from bs4 import BeautifulSoup
 
-from . import crawl, extract, harness, research
+from . import crawl, extract, harness, progress, research
 from .config import Settings
 from .llm import LLM, LLMError
 from .models import BrandKit, Evidence, SkillChoice, TaskPack
+from .verify import dominant_script
 
 log = logging.getLogger("anchor.prepare")
 MIN_EVIDENCE = 4
@@ -83,6 +84,7 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
     pack_dir = run_dir / "pack"
     assets = pack_dir / "assets"
     log.info("[prepare] %s -> %s", url, run_dir)
+    progress.report("crawling", url=url)
 
     home = asyncio.run(crawl.crawl_home(url, assets))
     soup = BeautifulSoup(home.home.html, "html.parser")
@@ -98,12 +100,15 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
         industry, reason = classify(h, home_text, ld_types, cfg)
     skill = h.skills[industry]
     log.info("[prepare] brand=%r industry=%s (%s)", name, industry, reason)
+    progress.report("crawling", brand=name, industry=industry)
 
     urls = crawl.candidate_urls(home, skill.list_meta("crawl_paths"), cfg.max_pages)
     pages = asyncio.run(crawl.crawl_pages(urls, cfg.max_pages))
     site_items, extras = extract.site_evidence(home.home, pages)
     domain = urlparse(home.url).netloc.removeprefix("www.")
-    news_items = research.news_evidence(name, domain, skill.list_meta("news_queries"), cfg.max_articles)
+    progress.report("researching", pages=1 + len(pages), site_evidence=len(site_items))
+    script = dominant_script(" ".join(d["text"] for d in site_items) or home_text)
+    news_items = research.news_evidence(name, domain, skill.list_meta("news_queries"), cfg.max_articles, script)
 
     ranked = sorted(site_items + news_items, key=lambda d: d.pop("_rank", 0), reverse=True)[:70]
     evidence = [Evidence(id=f"E{i}", **d) for i, d in enumerate(ranked, start=1)]
@@ -129,10 +134,11 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
     )
     pack = TaskPack(
         task_id=task_id, url=home.url, created_at=datetime.now(timezone.utc).isoformat(),
-        industry=industry, industry_reason=reason, max_posts=max_posts, brand=brand,
+        industry=industry, industry_reason=reason, max_posts=max_posts, brand=brand, script=script,
         evidence=evidence, pages_crawled=[home.url] + [p.url for p in pages],
     )
     write_pack(pack, pack_dir, extras.get("customers", []))
+    progress.report("mining", evidence=len(evidence), news=sum(e.kind == "article" for e in evidence))
     log.info("[prepare] %d evidence items (%d site, %d news) from %d pages",
              len(evidence), sum(e.kind != "article" for e in evidence),
              sum(e.kind == "article" for e in evidence), len(pack.pages_crawled))

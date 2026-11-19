@@ -13,4 +13,5 @@ fonttools>=4.55
 brotli>=1.1
 fastapi>=0.115
 uvicorn>=0.32
+psycopg[binary]>=3.2   # Postgres storage (optional: only used when DATABASE_URL is set)
 pytest>=8.0

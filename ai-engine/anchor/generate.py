@@ -15,6 +15,7 @@ from datetime import date
 from pathlib import Path
 
 from . import harness as harness_mod
+from . import progress
 from .config import Settings
 from .llm import LLM, LLMError
 from .models import (Card, CriticReport, Evidence, MinedFact, MinedFacts, PostDraft,
@@ -73,11 +74,34 @@ THE FACT
 THE ONLY MATERIAL YOU MAY STATE AS FACT (cited evidence, verbatim):
 {sources}
 
-Write, following the loaded skill's LinkedIn and Instagram guidance:
-- `linkedin`: 600-1800 characters. The first line is the hook (under 200 characters) and must
-  work before "see more". Short paragraphs separated by blank lines. Name {brand}. End with a
-  specific, non-generic close (no "Thoughts?"). 0-2 emojis. No hashtags or at most 3 at the end.
-- `instagram_caption`: 150-1200 characters, opens with a hook line, names {brand}.
+VOICE -- pick ONE register that fits THIS fact, its audience and the industry, and commit to it
+across every field. Set `voice` to its name.
+- celebratory: a launch, general availability, award, milestone, funding round, opening. Energy and
+  momentum: vivid verbs ("ships", "opens", "lands"), a punchy first line, one exclamation mark at most.
+- authoritative: a partnership, enterprise deal, compliance credential, research or policy. Crisp,
+  confident, executive: lead with what changed and for whom, no adjectives doing the work of facts.
+- storyteller: a customer outcome, testimonial, founder or team moment. Open on the person or the
+  problem, then the turn, then the result -- a tiny narrative arc.
+- inviting: hospitality, dining, travel, an experience or a product people use with their senses.
+  Place-led and sensory (what you see, taste, hear) -- grounded in the evidence's own details.
+- urgent: an offer, price, deadline, limited event or seasonal window. Direct, benefit first, a
+  clear call to action; state dates and terms exactly as given.
+- insightful: data, a trend, a how-to, a feature explained. Lead with the tension or the surprising
+  number, then the explanation.
+The register changes the WORDS, never the facts: excitement comes from rhythm, verbs and framing,
+not from superlatives ("best", "leading", "first") the evidence does not state.
+
+Write, following the voice above and the loaded skill's LinkedIn and Instagram guidance, entirely in
+{language} (translate anything the evidence says in another language; never paste another script):
+- `linkedin`: 600-1800 characters. The first line is the hook (under 200 characters) and must work
+  before "see more": a sharp claim, a striking number, or a tension -- never a throat-clearing
+  "We are pleased to announce" or "Exciting news". Short paragraphs separated by blank lines.
+  Name {brand}. End with a specific, non-generic close (no "Thoughts?"). 0-2 emojis. At most 3
+  hashtags at the end.
+- `instagram_caption`: 150-900 characters, written for the scroll, not a press release: a hook
+  line that stops the thumb, then 2-4 short lines (line breaks between them), one concrete detail
+  from the evidence, and a closing line that invites action (save, visit, book, try, tag someone)
+  in the chosen voice. 1-3 emojis that fit the voice are welcome; never an emoji string. Names {brand}.
 - `hashtags`: 3-5, specific to the subject (no #success/#motivation filler).
 - `poster_headline` (<= 80 chars) for the COVER slide, `poster_kicker` (<= 48 chars: a neutral topic
   label such as "Customer story", "Dining", "Offer" -- never "Launch"/"New" unless the evidence says
@@ -113,9 +137,21 @@ Check every factual statement in the posts against the SOURCE EVIDENCE only. A s
 unsupported if the evidence does not state it, if it exaggerates it (e.g. "leading", "first",
 "largest", "award-winning" without the evidence saying so), merges separate facts into a new
 claim, or invents a person, quote, number, date, place, price or outcome. Opinions framed as
-opinion and generic calls to action are fine. Also flag voice problems that would embarrass the
-brand: clichés, hype, emoji spam, engagement bait, or a tone that contradicts the playbook below.
-Return empty lists when everything is supported. Do not rewrite the posts."""
+opinion, generic calls to action, and faithful translations of the evidence are fine.
+
+The writer picked a register (`voice`) for this fact. Energy, rhythm, vivid verbs, a single
+exclamation mark or a fitting emoji are NOT problems when they suit that voice -- judge the tone
+against the voice and the playbook, not against a neutral press-release style. Flag as voice
+problems only what would embarrass the brand: clichés, unsupported hype words, emoji spam,
+engagement bait, a flat or generic opening line, or a register that clearly mismatches the
+fact (e.g. jokey about a compliance credential). Return empty lists when everything is
+supported. Do not rewrite the posts."""
+
+
+_LANGUAGE = {"LATIN": "English (or, if the brand's own site is in another Latin-script language, that language)",
+             "CJK": "the language of the brand's own website (Japanese or Chinese)", "HANGUL": "Korean",
+             "CYRILLIC": "the brand's own Cyrillic-script language", "ARABIC": "Arabic",
+             "DEVANAGARI": "Hindi", "THAI": "Thai", "HEBREW": "Hebrew", "GREEK": "Greek"}
 
 
 def choose_skills(h: harness_mod.Harness, pack: TaskPack, llm: LLM, traj: Trajectory) -> list[str]:
@@ -240,6 +276,7 @@ def write_card(idx: int, fact: MinedFact, pack: TaskPack, h: harness_mod.Harness
     banned = GLOBAL_BANNED + h.banned_phrases(skills)
     task = WRITE_TASK.format(
         brand=pack.brand.name, url=pack.brand.url, today=date.today().isoformat(), n_slides=cfg.detail_slides,
+        language=_LANGUAGE.get(pack.script, f"the language of {pack.brand.name}'s own website"),
         fact=json.dumps(fact.model_dump(), indent=1, ensure_ascii=False),
         sources="\n\n".join(e.render() for e in sources),
     )
@@ -265,7 +302,7 @@ def write_card(idx: int, fact: MinedFact, pack: TaskPack, h: harness_mod.Harness
             problems = [f"writer failed: {exc}"]
             break
         draft = normalize_post(draft, fact, cfg.detail_slides)
-        problems = check_post(draft, fact, sources, pack.brand.name, banned, cfg.detail_slides)
+        problems = check_post(draft, fact, sources, pack.brand.name, banned, cfg.detail_slides, pack.script)
         soft = []
         if not problems:
             problems, soft = _critic(draft, sources, skill_text, critic, idx, traj)
@@ -294,7 +331,7 @@ def _critic(draft: PostDraft, sources: list[Evidence], skill_text: str, critic: 
             CRITIC_SYSTEM + ("\n\nPLAYBOOK:\n" + skill_text[:6000] if skill_text else ""),
             "SOURCE EVIDENCE:\n" + "\n\n".join(e.render() for e in sources)
             + "\n\nPOSTS TO CHECK:\n" + json.dumps(
-                {**{k: getattr(draft, k) for k in ("linkedin", "instagram_caption", "poster_headline",
+                {**{k: getattr(draft, k) for k in ("voice", "linkedin", "instagram_caption", "poster_headline",
                                                     "poster_kicker", "poster_stat")},
                  "carousel_slides": [s.model_dump() for s in draft.slides]}, indent=1, ensure_ascii=False),
             CriticReport, temperature=0.0)
@@ -341,6 +378,8 @@ def generate(pack: TaskPack, harness_dir: Path, out_dir: Path, cfg: Settings) ->
         fact = queue.pop(0)
         if cards:
             traj.action(f"backfill: writing next fact ({sum(c.status == 'verified' for c in cards)} verified so far)")
+        progress.report("writing", post=len(cards) + 1, target=pack.max_posts, headline=fact.headline,
+                        verified=sum(c.status == "verified" for c in cards), facts=len(facts))
         cards.append(write_card(len(cards) + 1, fact, pack, h, skills, writer, critic, cfg, traj))
     verified_n = sum(c.status == "verified" for c in cards)
     if verified_n < cfg.min_posts:
@@ -367,7 +406,8 @@ def render_markdown(result: RolloutResult, pack: TaskPack, posters: dict[str, li
     for n, card in enumerate(result.verified, 1):
         p, f = card.post, card.fact
         lines += [f"## Post {n} — {f.headline}", "",
-                  f"**Category:** {f.category} · **Evidence:** {', '.join(f.evidence_ids)}", ""]
+                  f"**Category:** {f.category} · " + (f"**Voice:** {p.voice} · " if p.voice else "")
+                  + f"**Evidence:** {', '.join(f.evidence_ids)}", ""]
         files = posters.get(card.id, [])
         if files:
             pngs = [f for f in files if f.endswith(".png")]

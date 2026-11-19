@@ -151,24 +151,94 @@ def brand_font_path(pack: TaskPack, heading: bool, cache: Path) -> Path:
 
 
 _CMAPS: dict[str, set[int]] = {}
+_WEIGHTS: dict[str, int] = {}
+
+# Per writing system: Google Fonts family (full TTF, includes Latin) and local system fonts,
+# tried after the brand font and Inter. Pillow draws a whole string with one font, so the
+# first font that covers EVERY character of the string wins.
+_SCRIPT_FONTS: dict[str, tuple[str, list[str]]] = {
+    "CJK": ("Noto Sans JP", ["/System/Library/Fonts/Hiragino Sans GB.ttc", "/System/Library/Fonts/PingFang.ttc",
+                             "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc",
+                             "/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc"]),
+    "HANGUL": ("Noto Sans KR", ["/System/Library/Fonts/AppleSDGothicNeo.ttc",
+                                "/usr/share/fonts/opentype/noto/NotoSansCJK-Regular.ttc"]),
+    "DEVANAGARI": ("Noto Sans Devanagari", []),
+    "THAI": ("Noto Sans Thai", []),
+    "HEBREW": ("Noto Sans Hebrew", ["/System/Library/Fonts/ArialHB.ttc"]),
+    "ARABIC": ("Noto Sans Arabic", []),
+    "BENGALI": ("Noto Sans Bengali", []),
+    "TAMIL": ("Noto Sans Tamil", []),
+}
+_UNIVERSAL = ["/Library/Fonts/Arial Unicode.ttf", "/System/Library/Fonts/Supplemental/Arial Unicode.ttf",
+              "/usr/share/fonts/truetype/dejavu/DejaVuSans.ttf"]
+FONT_CACHE: Path | None = None  # set by render_all; Google fallback fonts are cached here
 
 
-def for_text(path: Path, text: str) -> Path:
-    """The brand font if it has every character of `text`, else Inter (no box glyphs, ever)."""
+def _cmap(path: Path) -> set[int]:
     key = str(path)
     if key not in _CMAPS:
         try:
-            _CMAPS[key] = set((TTFont(key).getBestCmap() or {}).keys())
+            tt = TTFont(key, fontNumber=0, lazy=True)
+            _CMAPS[key] = set((tt.getBestCmap() or {}).keys())
+            _WEIGHTS[key] = int(getattr(tt.get("OS/2"), "usWeightClass", 400) or 400)
         except Exception:
-            _CMAPS[key] = set()
-    if all(ord(c) in _CMAPS[key] for c in text if not c.isspace()):
+            _CMAPS[key], _WEIGHTS[key] = set(), 400
+    return _CMAPS[key]
+
+
+def _is_bold(path: Path) -> bool:
+    _cmap(path)
+    return path == INTER["bold"] or _WEIGHTS.get(str(path), 400) >= 600
+
+
+def _fallbacks(path: Path, text: str) -> list[Path]:
+    from .verify import script_of
+
+    bold = _is_bold(path)
+    chain = [path, INTER["bold" if bold else "regular"]]
+    scripts = list(dict.fromkeys(s for s in map(script_of, text) if s and s not in ("LATIN", "GREEK", "CYRILLIC")))
+    for sc in scripts:
+        family, local = _SCRIPT_FONTS.get(sc, ("", []))
+        if family and FONT_CACHE is not None:
+            g = _google_font(family, 700 if bold else 400, FONT_CACHE)
+            if g:
+                chain.append(g)
+        chain += [Path(p) for p in local if Path(p).is_file()]
+    chain += [Path(p) for p in _UNIVERSAL if Path(p).is_file()]
+    return list(dict.fromkeys(chain))
+
+
+def for_text(path: Path, text: str) -> Path:
+    """The brand font if it has every character of `text`; else the first fallback that does
+    (Inter, then a font for the text's script); else the one that covers the most."""
+    need = {ord(c) for c in text if not c.isspace()}
+    if need <= _cmap(path):
         return path
-    return INTER["bold"] if "bold" in key or path == INTER["bold"] else INTER["regular"]
+    best, best_n = path, -1
+    for cand in _fallbacks(path, text):
+        have = len(need & _cmap(cand))
+        if have == len(need):
+            return cand
+        if have > best_n:
+            best, best_n = cand, have
+    return best
+
+
+def drawable(path: Path, text: str) -> str:
+    """`text` minus characters `path` cannot draw, so a box glyph never reaches a poster."""
+    cmap = _cmap(path)
+    out = "".join(c for c in text if c.isspace() or ord(c) in cmap)
+    return re.sub(r"\s{2,}", " ", out).strip() if out != text else text
+
+
+def prep(path: Path, text: str) -> tuple[Path, str]:
+    chosen = for_text(path, text)
+    return chosen, drawable(chosen, text)
 
 
 def font(path: Path, size: int) -> ImageFont.FreeTypeFont:
     try:
-        return ImageFont.truetype(str(path), size)
+        return ImageFont.truetype(str(path), size, index=0)
     except OSError:
         return ImageFont.truetype(str(INTER["regular"]), size)
 
@@ -186,7 +256,7 @@ def wrap(draw: ImageDraw.ImageDraw, text: str, f, width: int) -> list[str]:
 
 
 def fit_text(draw, text: str, path: Path, width: int, max_lines: int, sizes=(76, 68, 60, 54, 48, 44)):
-    path = for_text(path, text)
+    path, text = prep(path, text)
     for size in sizes:
         f = font(path, size)
         lines = wrap(draw, text, f, width)
@@ -259,7 +329,8 @@ def paste_logo(canvas: Image.Image, logo: Image.Image, xy: tuple[int, int], bg) 
 def _page_marker(d: ImageDraw.ImageDraw, page: int, total: int, path: Path, color) -> None:
     if total > 1:
         label = f"{page}/{total}" + ("  →" if page < total else "")
-        f = font(for_text(path, label), 26)
+        path, label = prep(path, label)
+        f = font(path, 26)
         d.text((W - M - d.textlength(label, font=f), M + 14), label, font=f, fill=color)
 
 
@@ -267,9 +338,11 @@ def _footer(d: ImageDraw.ImageDraw, card: Card, pack: TaskPack, path: Path, colo
     src = card.sources[0] if card.sources else None
     host = urlparse(src.url).netloc.removeprefix("www.") if src else pack.brand.domain
     right = f"Source: {host}" + (f" · {src.date}" if src and src.date else "")
-    f = font(for_text(path, pack.brand.domain + right), 24)
+    path = for_text(path, pack.brand.domain + right)
+    domain, right = drawable(path, pack.brand.domain), drawable(path, right)
+    f = font(path, 24)
     d.line((M, H - 86, W - M, H - 86), fill=color, width=2)
-    d.text((M, H - 62), pack.brand.domain, font=f, fill=color)
+    d.text((M, H - 62), domain, font=f, fill=color)
     d.text((W - M - d.textlength(right, font=f), H - 62), right, font=f, fill=color)
 
 
@@ -290,13 +363,15 @@ def slide(card: Card, pack: TaskPack, index: int, total: int, out: Path, cfg: Se
     if logo is not None:
         paste_logo(canvas, logo, (M, M + 8), bg)
     else:
-        d.text((M, M + 8), pack.brand.name.upper(), font=font(head_path, 28), fill=text_c)
+        np, name = prep(head_path, pack.brand.name.upper())
+        d.text((M, M + 8), name, font=font(np, 28), fill=text_c)
     _page_marker(d, index, total, body_path, muted)
 
     hf, lines, size = fit_text(d, sl.title, head_path, W - 2 * M - 36, 3, sizes=(76, 68, 60, 54, 48))
     lh = int(size * 1.18)
-    bf, bl = font(for_text(body_path, " ".join(sl.bullets)), 44), 60
-    bullets = [wrap(d, b, bf, W - 2 * M - 56) for b in sl.bullets[:3]]
+    bp = for_text(body_path, " ".join(sl.bullets))
+    bf, bl = font(bp, 44), 60
+    bullets = [wrap(d, drawable(bp, b), bf, W - 2 * M - 56) for b in sl.bullets[:3]]
     block = 56 + lh * len(lines) + 80 + sum(len(b) * bl + 40 for b in bullets)
     top, bottom = 220, H - 140
     y = max(top, top + (bottom - top - block) // 2)  # centre the content between header and footer
@@ -338,11 +413,12 @@ def poster(card: Card, pack: TaskPack, image: Image.Image | None, out: Path, cfg
         paste_logo(canvas, logo, (M, y), bg)
         y += logo.height + 56
     else:
-        d.text((M, y), pack.brand.name.upper(), font=font(head_path, 34), fill=text_c)
+        np, name = prep(head_path, pack.brand.name.upper())
+        d.text((M, y), name, font=font(np, 34), fill=text_c)
         y += 90
 
-    kicker = (p.poster_kicker or card.fact.category).upper()
-    kf = font(for_text(body_path, kicker), 26)
+    kp, kicker = prep(body_path, (p.poster_kicker or card.fact.category).upper())
+    kf = font(kp, 26)
     kw = int(d.textlength(kicker, font=kf)) + 40
     d.rounded_rectangle((M, y, M + kw, y + 50), 25, fill=accent)
     d.text((M + 20, y + 11), kicker, font=kf, fill=readable_on(accent, (255, 255, 255)))
@@ -356,6 +432,7 @@ def poster(card: Card, pack: TaskPack, image: Image.Image | None, out: Path, cfg
 
     footer_h = 110
     area = (M, y, W - M, H - footer_h)
+    stat_path, stat = prep(head_path, p.poster_stat) if p.poster_stat else (head_path, "")
     if image is not None and area[3] - area[1] > 260:
         size = (area[2] - area[0], area[3] - area[1])
         if image.width / image.height > size[0] / size[1] * 1.15:
@@ -366,18 +443,18 @@ def poster(card: Card, pack: TaskPack, image: Image.Image | None, out: Path, cfg
             photo = ImageOps.fit(image, size, Image.Resampling.LANCZOS)
         r = rounded(photo)
         canvas.paste(r, area[:2], r)
-        if p.poster_stat:
-            sf = font(for_text(head_path, p.poster_stat), 96)
-            sw = int(d.textlength(p.poster_stat, font=sf))
+        if stat:
+            sf = font(stat_path, 96)
+            sw = int(d.textlength(stat, font=sf))
             box = (area[0] + 28, area[3] - 160, area[0] + 28 + sw + 56, area[3] - 28)
             shadow = Image.new("RGBA", canvas.size, (0, 0, 0, 0))
             ImageDraw.Draw(shadow).rounded_rectangle(box, 24, fill=(0, 0, 0, 90))
             canvas.paste(shadow.filter(ImageFilter.GaussianBlur(12)), (0, 6), shadow.filter(ImageFilter.GaussianBlur(12)))
             d.rounded_rectangle(box, 24, fill=accent)
-            d.text((box[0] + 28, box[1] + 8), p.poster_stat, font=sf, fill=readable_on(accent, (255, 255, 255)))
-    elif p.poster_stat:
-        sf = font(for_text(head_path, p.poster_stat), 200)
-        d.text((M, y + 20), p.poster_stat, font=sf, fill=readable_on(bg, accent))
+            d.text((box[0] + 28, box[1] + 8), stat, font=sf, fill=readable_on(accent, (255, 255, 255)))
+    elif stat:
+        sf = font(stat_path, 200)
+        d.text((M, y + 20), stat, font=sf, fill=readable_on(bg, accent))
 
     _page_marker(d, 1, total, body_path, muted)
     _footer(d, card, pack, body_path, muted)
@@ -397,6 +474,8 @@ def _dominant(img: Image.Image) -> tuple[int, int, int]:
 def render_all(cards: list[Card], pack: TaskPack, out_dir: Path, cfg: Settings) -> dict[str, list[str]]:
     """Per post: cover (logo, title, image) + explainer slides as PNGs, plus one PDF of the whole
     carousel (LinkedIn's document format). Returns card id -> file names, cover first."""
+    global FONT_CACHE
+    FONT_CACHE = cfg.cache_dir / "fonts"
     images = brand_images(pack, cfg.cache_dir / "images")
     files: dict[str, list[str]] = {}
     for i, card in enumerate(cards):

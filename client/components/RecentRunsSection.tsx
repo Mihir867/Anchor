@@ -1,39 +1,65 @@
 "use client";
 
-import React, { useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import { listRuns, RunItem, getRun, RunResult } from "@/lib/api";
+import { STAGES } from "@/lib/stages";
 
 interface RecentRunsSectionProps {
   onSelectRun: (res: RunResult) => void;
+  /** Follow a run that is still in flight. */
+  onAttach: (id: string, url: string, mode: "fast" | "refine") => void;
   selectedTaskId?: string;
+  activeJobId?: string | null;
+  /** Bump to force a reload (e.g. when a run finishes). */
+  refreshKey?: number;
 }
 
-export function RecentRunsSection({
-  onSelectRun,
-  selectedTaskId,
-}: RecentRunsSectionProps) {
-  const [runs, setRuns] = useState<RunItem[]>([]);
-  const [isLoading, setIsLoading] = useState(false);
+function ago(iso?: string) {
+  if (!iso) return "";
+  const s = (Date.now() - Date.parse(iso)) / 1000;
+  if (s < 60) return "just now";
+  if (s < 3600) return `${Math.floor(s / 60)} min ago`;
+  if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
+  return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
+}
+
+function host(r: RunItem) {
+  const u = r.url || r.brand || r.task_id;
+  try {
+    return new URL(u.includes("//") ? u : `https://${u}`).hostname.replace(/^www\./, "");
+  } catch {
+    return u;
+  }
+}
+
+export function RecentRunsSection({ onSelectRun, onAttach, selectedTaskId, activeJobId, refreshKey }: RecentRunsSectionProps) {
+  const [runs, setRuns] = useState<RunItem[] | null>(null);
   const [loadingId, setLoadingId] = useState<string | null>(null);
 
-  const fetchRuns = async () => {
-    setIsLoading(true);
-    const list = await listRuns();
-    setRuns(list);
-    setIsLoading(false);
-  };
+  const load = useCallback(async () => setRuns(await listRuns()), []);
 
   useEffect(() => {
-    fetchRuns();
-  }, []);
+    load();
+  }, [load, refreshKey]);
 
-  const handleRunClick = async (item: RunItem) => {
-    setLoadingId(item.id);
+  // While anything is in flight, keep the archive live.
+  const anyRunning = runs?.some((r) => r.status === "running" || r.status === "queued");
+  useEffect(() => {
+    if (!anyRunning) return;
+    const t = setInterval(() => document.visibilityState === "visible" && load(), 5000);
+    return () => clearInterval(t);
+  }, [anyRunning, load]);
+
+  const open = async (r: RunItem) => {
+    if (r.status === "running" || r.status === "queued") {
+      onAttach(r.id, r.url || r.brand || "", (r.mode as "fast" | "refine") || "fast");
+      return;
+    }
+    if (r.status !== "done") return;
+    setLoadingId(r.id);
     try {
-      const data = await getRun(item.id);
-      if (data.result) {
-        onSelectRun(data.result);
-      }
+      const data = await getRun(r.id);
+      if (data.result) onSelectRun(data.result);
     } catch (err) {
       console.error("Failed to load run:", err);
     } finally {
@@ -42,84 +68,81 @@ export function RecentRunsSection({
   };
 
   return (
-    <section id="recent-runs" className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-12 border-t border-[#212c3d]/60 font-sans">
-      <div className="flex items-center justify-between mb-6">
+    <section id="recent-runs" className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-14">
+      <div className="flex items-end justify-between mb-6">
         <div>
-          <h3 className="text-xl font-bold text-[#f8fafc] tracking-tight">
-            Generated Run Archive
-          </h3>
-          <p className="text-xs text-[#909dad] mt-1">
-            Explore past website crawls and verified post generations stored on the backend.
-          </p>
+          <h2 className="text-2xl font-semibold tracking-tight">Library</h2>
+          <p className="text-sm text-muted mt-1">Every run is saved here, including ones still in progress.</p>
         </div>
-
         <button
           type="button"
-          onClick={fetchRuns}
-          disabled={isLoading}
-          className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#182232] hover:bg-[#212c3d] text-[#909dad] hover:text-[#f8fafc] border border-[#212c3d] transition-colors cursor-pointer"
+          onClick={load}
+          className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-[13px] font-medium border border-line bg-surface hover:border-line-strong transition-colors cursor-pointer"
         >
-          <svg
-            className={`w-3.5 h-3.5 ${isLoading ? "animate-spin" : ""}`}
-            fill="none"
-            viewBox="0 0 24 24"
-            stroke="currentColor"
-          >
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15" />
+          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.6m14.8 2A8 8 0 004.6 9m0 0H9m11 11v-5h-.6m0 0a8 8 0 01-15.4-2m15.4 2H15" />
           </svg>
-          <span>Refresh</span>
+          Refresh
         </button>
       </div>
 
-      {runs.length === 0 ? (
-        <div className="p-8 rounded-2xl bg-[#0c121d] border border-[#212c3d] text-center text-xs text-[#909dad]">
-          {isLoading ? "Loading run archive..." : "No runs found yet. Generate your first brand above!"}
+      {runs === null ? (
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
+          {[0, 1, 2].map((i) => (
+            <div key={i} className="h-[132px] rounded-2xl border border-line bg-surface p-5 space-y-3">
+              <div className="h-4 w-1/2 rounded skeleton" />
+              <div className="h-3 w-3/4 rounded skeleton" />
+            </div>
+          ))}
+        </div>
+      ) : runs.length === 0 ? (
+        <div className="p-10 rounded-2xl bg-surface border border-dashed border-line-strong text-center">
+          <div className="font-medium">Nothing here yet</div>
+          <p className="text-sm text-muted mt-1">Paste a website above and your first run will show up here.</p>
         </div>
       ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-4">
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
           {runs.map((r) => {
-            const isSelected = selectedTaskId === r.task_id || selectedTaskId === r.id;
-            const isThisLoading = loadingId === r.id;
-
+            const running = r.status === "running" || r.status === "queued";
+            const selected = selectedTaskId === r.task_id || selectedTaskId === r.id || activeJobId === r.id;
+            const stage = STAGES.find((s) => s.id === r.stage);
             return (
-              <div
+              <button
                 key={r.id}
-                onClick={() => handleRunClick(r)}
-                className={`p-4 rounded-xl border transition-all duration-150 cursor-pointer flex flex-col justify-between shadow-sm group ${
-                  isSelected
-                    ? "bg-[#182232] border-amber-400/80 shadow-amber-500/5 ring-1 ring-amber-400/30"
-                    : "bg-[#0c121d] border-[#212c3d] hover:border-[#38495f] hover:bg-[#111927]"
+                type="button"
+                onClick={() => open(r)}
+                disabled={r.status === "failed"}
+                className={`group text-left p-5 rounded-2xl border bg-surface transition-all cursor-pointer disabled:cursor-default flex flex-col justify-between min-h-[132px] ${
+                  selected ? "border-ink shadow-lift" : "border-line hover:border-line-strong hover:shadow-card hover:-translate-y-0.5"
                 }`}
               >
                 <div>
-                  <div className="flex items-center justify-between gap-2 mb-2">
-                    <span className="font-bold text-sm text-[#f8fafc] group-hover:text-amber-400 transition-colors">
-                      {r.brand || r.task_id.split("-")[0]}
-                    </span>
-                    <span className="text-[10px] font-mono px-2 py-0.5 rounded bg-emerald-500/10 text-emerald-400 border border-emerald-500/20">
-                      {r.verified_posts} Verified
-                    </span>
-                  </div>
-
-                  <p className="text-xs text-[#909dad] font-mono truncate">
-                    {r.task_id}
-                  </p>
-                </div>
-
-                <div className="mt-4 pt-3 border-t border-[#212c3d]/60 flex items-center justify-between text-[11px] text-[#909dad]">
-                  <span className="capitalize">{r.industry || "general"}</span>
-                  <span className="text-slate-300 group-hover:text-[#f8fafc] font-medium flex items-center gap-1">
-                    {isThisLoading ? (
-                      "Loading..."
+                  <div className="flex items-center justify-between gap-2">
+                    <span className="font-semibold text-[15px] truncate">{r.brand && !r.brand.includes("//") ? r.brand : host(r)}</span>
+                    {running ? (
+                      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full bg-brand-tint text-brand-deep border border-amber-200 shrink-0">
+                        <span className="w-1.5 h-1.5 rounded-full bg-brand animate-breathe" />
+                        {stage?.short || (r.status === "queued" ? "Queued" : "Running")}
+                      </span>
+                    ) : r.status === "failed" ? (
+                      <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-red-50 text-bad border border-red-200 shrink-0">Failed</span>
                     ) : (
-                      <>
-                        <span>View Posts</span>
-                        <span>→</span>
-                      </>
+                      <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-ok-tint text-ok border border-emerald-200 shrink-0">
+                        {r.verified_posts} post{r.verified_posts === 1 ? "" : "s"}
+                      </span>
                     )}
+                  </div>
+                  <div className="text-[13px] text-muted mt-1 truncate">{host(r)}</div>
+                </div>
+                <div className="mt-4 flex items-center justify-between text-[12px] text-faint">
+                  <span>
+                    <span className="capitalize">{r.industry || "—"}</span> · {r.mode || "fast"} · {ago(r.created_at)}
+                  </span>
+                  <span className="text-ink-soft font-medium group-hover:text-ink">
+                    {loadingId === r.id ? "Opening…" : running ? "Follow →" : r.status === "done" ? "View →" : ""}
                   </span>
                 </div>
-              </div>
+              </button>
             );
           })}
         </div>

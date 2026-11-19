@@ -1,196 +1,114 @@
 "use client";
 
 import React, { useState } from "react";
-import {
-  PromptInput,
-  PromptInputTextarea,
-  PromptInputActions,
-  PromptInputAction,
-} from "./prompt-kit/prompt-input";
-import { createRun, getRun, RunResult } from "@/lib/api";
-
-type StatusType = "idle" | "queued" | "crawling" | "extracting" | "generating" | "verifying" | "done";
+import { PromptInput, PromptInputTextarea, PromptInputActions, PromptInputAction } from "./prompt-kit/prompt-input";
+import type { StartPayload } from "@/lib/useRunJob";
 
 interface HeroSectionProps {
-  onRunCompleted?: (result: RunResult) => void;
+  onStart: (payload: StartPayload) => void;
+  /** A run is in flight: the input is locked until it finishes. */
+  busy: boolean;
 }
 
-export function HeroSection({ onRunCompleted }: HeroSectionProps) {
-  const [url, setUrl] = useState("https://native.no");
+const SAMPLES = [
+  { label: "native.no", url: "https://native.no" },
+  { label: "tanyxai.com", url: "https://www.tanyxai.com" },
+  { label: "devrev.ai", url: "https://devrev.ai" },
+  { label: "inhabitr.ai", url: "https://inhabitr.ai" },
+];
+
+export function HeroSection({ onStart, busy }: HeroSectionProps) {
+  const [url, setUrl] = useState("");
   const [mode, setMode] = useState<"fast" | "refine">("fast");
   const [industry, setIndustry] = useState<string>("auto");
-  const [status, setStatus] = useState<StatusType>("idle");
-  const [jobId, setJobId] = useState<string | null>(null);
-  const [errorMsg, setErrorMsg] = useState<string | null>(null);
-  const [elapsedSecs, setElapsedSecs] = useState<number>(0);
 
-  const handleSubmit = async () => {
-    if (!url.trim()) return;
-
-    setStatus("queued");
-    setErrorMsg(null);
-    setElapsedSecs(0);
-
-    const startTime = Date.now();
-    const timer = setInterval(() => {
-      setElapsedSecs(Math.floor((Date.now() - startTime) / 1000));
-    }, 1000);
-
-    try {
-      const newJobId = await createRun({
-        url: url.trim(),
-        mode,
-        industry: industry === "auto" ? null : industry,
-        posts: 3,
-      });
-
-      setJobId(newJobId);
-      pollJob(newJobId, timer);
-    } catch (err: unknown) {
-      clearInterval(timer);
-      const message = err instanceof Error ? err.message : String(err);
-      setErrorMsg(message);
-      setStatus("idle");
-    }
-  };
-
-  const pollJob = (id: string, timer: NodeJS.Timeout) => {
-    const interval = setInterval(async () => {
-      try {
-        const data = await getRun(id);
-        if (data.status === "running") {
-          // Progress simulation stages based on elapsed time
-          setStatus("crawling");
-        } else if (data.status === "done") {
-          clearInterval(interval);
-          clearInterval(timer);
-          setStatus("done");
-          if (data.result) {
-            onRunCompleted?.(data.result);
-          }
-        } else if (data.status === "failed") {
-          clearInterval(interval);
-          clearInterval(timer);
-          setErrorMsg(data.error || "Job execution failed");
-          setStatus("idle");
-        }
-      } catch {
-        // Keep polling
-      }
-    }, 2500);
-  };
-
-  const handleSelectSample = (sampleUrl: string) => {
-    setUrl(sampleUrl);
+  const submit = () => {
+    const u = url.trim();
+    if (!u || busy) return;
+    onStart({ url: u, mode, industry: industry === "auto" ? null : industry, posts: 3 });
   };
 
   return (
-    <section id="generator" className="relative w-full flex flex-col items-center justify-center px-4 pt-12 pb-16 overflow-hidden font-sans">
-      {/* Subtle Atmospheric Radial Glow (Native.no style) */}
+    <section id="generator" className="relative w-full flex flex-col items-center px-4 pt-16 sm:pt-24 pb-14 overflow-hidden">
       <div
-        className="pointer-events-none absolute -top-40 left-1/2 -translate-x-1/2 w-[1000px] h-[550px] bg-[radial-gradient(ellipse_at_top,rgba(245,158,11,0.12),rgba(8,13,22,0)_70%)]"
-        aria-hidden="true"
+        aria-hidden
+        className="pointer-events-none absolute -top-48 left-1/2 -translate-x-1/2 w-[1100px] h-[620px] bg-[radial-gradient(ellipse_at_center,rgba(251,191,36,0.20),rgba(250,249,247,0)_65%)]"
       />
 
-      {/* Eyebrow Badge (No emojis, sleek SVG) */}
-      <div className="inline-flex items-center gap-2 px-3.5 py-1.5 rounded-full bg-[#182232] border border-[#212c3d] text-xs font-medium text-[#909dad] mb-6 tracking-wide">
-        <svg
-          className="w-3.5 h-3.5 text-[#f59e0b] fill-current"
-          viewBox="0 0 24 24"
-          aria-hidden="true"
-        >
+      <div className="relative inline-flex items-center gap-2 px-3 py-1 rounded-full bg-surface border border-line text-[12px] font-medium text-muted mb-7 shadow-card">
+        <svg className="w-3.5 h-3.5 text-brand" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
           <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
         </svg>
-        <span>Autonomous Brand Intelligence & Content Engine</span>
+        Social posts that cite their sources
       </div>
 
-      {/* Hero Headline in Pure Inter */}
-      <h1 className="max-w-4xl text-center text-4xl sm:text-6xl md:text-7xl font-bold tracking-[-0.035em] text-[#f8fafc] leading-[1.08] mb-5 font-sans">
-        Your brand. <br className="hidden sm:inline" />
-        <span className="text-[#f8fafc]">Verifiably looking its best.</span>
+      <h1 className="relative max-w-4xl text-center text-[44px] leading-[1.04] sm:text-6xl md:text-7xl font-semibold tracking-[-0.04em] text-ink">
+        Your brand,
+        <br />
+        <span className="bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 bg-clip-text text-transparent">verifiably</span> at its best.
       </h1>
 
-      {/* Hero Subtitle */}
-      <p className="max-w-2xl text-center text-base sm:text-lg text-[#909dad] leading-relaxed mb-9 font-normal">
-        Give it any company website. Anchor crawls the site and press, extracts verifiable proof, and generates branded social carousels where every single claim traces to cited evidence.
+      <p className="relative max-w-xl text-center text-base sm:text-lg text-muted leading-relaxed mt-5 mb-10">
+        Paste a company website. Anchor reads the site and its press coverage, then writes LinkedIn and Instagram carousels where
+        every claim traces back to a source.
       </p>
 
-      {/* Prompt-Kit Chat / Input Container */}
-      <div className="w-full max-w-2xl relative z-10">
-        <PromptInput
-          value={url}
-          onValueChange={setUrl}
-          onSubmit={handleSubmit}
-          isLoading={status !== "idle" && status !== "done"}
-          className="shadow-[0_25px_60px_-15px_rgba(0,0,0,0.7)]"
-        >
-          <PromptInputTextarea
-            placeholder="Enter brand website (e.g. https://native.no) or custom query..."
-            disabled={status !== "idle" && status !== "done"}
-          />
-
+      <div className="relative w-full max-w-2xl z-10">
+        <PromptInput value={url} onValueChange={setUrl} onSubmit={submit} isLoading={busy}>
+          <PromptInputTextarea placeholder="Paste a website, e.g. https://www.salesforce.com" disabled={busy} aria-label="Brand website" />
           <PromptInputActions>
-            {/* Left Tools / Mode Selectors */}
             <div className="flex items-center gap-2">
-              {/* Mode Toggle with SVG icons */}
-              <button
-                type="button"
-                onClick={() => setMode(mode === "fast" ? "refine" : "fast")}
-                className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium bg-[#182232] hover:bg-[#212c3d] text-[#909dad] hover:text-[#f8fafc] border border-[#212c3d] transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-400"
-              >
-                {mode === "fast" ? (
-                  <svg className="w-3.5 h-3.5 text-[#f59e0b]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <polygon points="13 2 3 14 12 14 11 22 21 10 12 10 13 2" />
-                  </svg>
-                ) : (
-                  <svg className="w-3.5 h-3.5 text-[#f59e0b]" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
-                    <circle cx="12" cy="12" r="3" />
-                    <path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1 0 2.83 2 2 0 0 1-2.83 0l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-2 2 2 2 0 0 1-2-2v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83 0 2 2 0 0 1 0-2.83l.06-.06a1.65 1.65 0 0 0 .33-1.82 1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1-2-2 2 2 0 0 1 2-2h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 0-2.83 2 2 0 0 1 2.83 0l.06.06a1.65 1.65 0 0 0 1.82.33H9a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 2-2 2 2 0 0 1 2 2v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 0 2 2 0 0 1 0 2.83l-.06.06a1.65 1.65 0 0 0-.33 1.82V9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 2 2 2 2 0 0 1-2 2h-.09a1.65 1.65 0 0 0-1.51 1z" />
-                  </svg>
-                )}
-                <span>{mode === "fast" ? "Fast Mode" : "Harness² Refine"}</span>
-              </button>
-
-              {/* Industry Select */}
+              <div className="inline-flex p-0.5 rounded-full bg-sunken border border-line text-[12px] font-medium">
+                {(["fast", "refine"] as const).map((m) => (
+                  <button
+                    key={m}
+                    type="button"
+                    disabled={busy}
+                    onClick={() => setMode(m)}
+                    title={m === "fast" ? "One rollout, about 1–3 minutes" : "Harness² refinement, several minutes"}
+                    className={`h-7 px-3 rounded-full transition-all cursor-pointer disabled:cursor-default ${
+                      mode === m ? "bg-surface text-ink shadow-card" : "text-muted hover:text-ink"
+                    }`}
+                  >
+                    {m === "fast" ? "Fast" : "Refine"}
+                  </button>
+                ))}
+              </div>
               <select
                 value={industry}
+                disabled={busy}
                 onChange={(e) => setIndustry(e.target.value)}
-                className="bg-[#182232] text-[#909dad] hover:text-[#f8fafc] text-xs font-medium rounded-lg px-2.5 py-1.5 border border-[#212c3d] outline-none cursor-pointer hover:bg-[#212c3d] transition-colors duration-150 focus-visible:ring-1 focus-visible:ring-amber-400"
+                aria-label="Industry playbook"
+                className="h-8 bg-sunken text-muted hover:text-ink text-[12px] font-medium rounded-full pl-3 pr-2 border border-line outline-none cursor-pointer focus-visible:ring-2 focus-visible:ring-amber-200"
               >
-                <option value="auto">Auto-Classify</option>
-                <option value="saas">SaaS Playbook</option>
-                <option value="hospitality">Hospitality Playbook</option>
-                <option value="ecommerce">E-Commerce Playbook</option>
-                <option value="general">General Playbook</option>
+                <option value="auto">Auto-detect industry</option>
+                <option value="saas">SaaS</option>
+                <option value="hospitality">Hospitality</option>
+                <option value="ecommerce">E-commerce</option>
+                <option value="general">General</option>
               </select>
             </div>
 
-            {/* Right Action Button */}
-            <PromptInputAction tooltip="Generate verified posts & carousels">
+            <PromptInputAction tooltip="Generate verified posts">
               <button
                 type="button"
-                onClick={handleSubmit}
-                disabled={!url.trim() || (status !== "idle" && status !== "done")}
-                className={`inline-flex items-center gap-2 px-5 py-2 rounded-full font-semibold text-sm transition-all duration-150 ${
-                  !url.trim()
-                    ? "bg-[#182232] text-[#909dad] cursor-not-allowed border border-[#212c3d]"
-                    : "bg-[#f8fafc] text-[#080d16] hover:bg-[#e2e8f0] active:scale-[0.98] shadow-md cursor-pointer focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-white"
-                }`}
+                onClick={submit}
+                disabled={!url.trim() || busy}
+                className="inline-flex items-center gap-2 h-10 px-5 rounded-full font-semibold text-[14px] transition-all bg-ink text-white hover:bg-ink-soft active:scale-[0.98] shadow-card cursor-pointer disabled:bg-line disabled:text-faint disabled:shadow-none disabled:cursor-not-allowed"
               >
-                {status !== "idle" && status !== "done" ? (
+                {busy ? (
                   <>
-                    <svg className="animate-spin h-4 w-4 text-[#080d16]" fill="none" viewBox="0 0 24 24">
+                    <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
                       <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
                       <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
                     </svg>
-                    <span>Generating... ({elapsedSecs}s)</span>
+                    Generating
                   </>
                 ) : (
                   <>
-                    <span>Generate</span>
-                    <svg className="w-3.5 h-3.5 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="2.5">
-                      <line x1="5" y1="12" x2="19" y2="12" />
-                      <polyline points="12 5 19 12 12 19" />
+                    Generate
+                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
+                      <path d="M5 12h14M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
                     </svg>
                   </>
                 )}
@@ -199,124 +117,19 @@ export function HeroSection({ onRunCompleted }: HeroSectionProps) {
           </PromptInputActions>
         </PromptInput>
 
-        {/* Live Execution Timeline Progress */}
-        {status !== "idle" && (
-          <div className="mt-4 p-4 rounded-xl bg-[#0c121d] border border-[#212c3d] text-xs font-sans space-y-3">
-            <div className="flex items-center justify-between border-b border-[#212c3d]/60 pb-2.5">
-              <span className="font-semibold text-[#f8fafc] flex items-center gap-2">
-                <span className="w-2 h-2 rounded-full bg-[#f59e0b] animate-pulse" />
-                Backend Engine Task Active
-              </span>
-              <span className="text-[#909dad] font-mono text-[11px]">
-                {jobId ? `Job: ${jobId}` : "Running"} ({elapsedSecs}s elapsed)
-              </span>
-            </div>
-
-            <div className="grid grid-cols-2 sm:grid-cols-4 gap-2">
-              <div
-                className={`p-2.5 rounded-lg border text-center transition-colors duration-200 ${
-                  elapsedSecs < 12
-                    ? "bg-[#182232] border-[#f59e0b] text-[#f8fafc] font-medium"
-                    : "bg-[#0c121d] border-[#212c3d] text-[#909dad]"
-                }`}
-              >
-                1. Playwright Crawl
-              </div>
-              <div
-                className={`p-2.5 rounded-lg border text-center transition-colors duration-200 ${
-                  elapsedSecs >= 12 && elapsedSecs < 24
-                    ? "bg-[#182232] border-[#f59e0b] text-[#f8fafc] font-medium"
-                    : elapsedSecs >= 24
-                    ? "bg-[#0c121d] border-[#212c3d] text-[#909dad]"
-                    : "opacity-40"
-                }`}
-              >
-                2. Extract Proof
-              </div>
-              <div
-                className={`p-2.5 rounded-lg border text-center transition-colors duration-200 ${
-                  elapsedSecs >= 24 && elapsedSecs < 42
-                    ? "bg-[#182232] border-[#f59e0b] text-[#f8fafc] font-medium"
-                    : elapsedSecs >= 42
-                    ? "bg-[#0c121d] border-[#212c3d] text-[#909dad]"
-                    : "opacity-40"
-                }`}
-              >
-                3. Mine & Draft
-              </div>
-              <div
-                className={`p-2.5 rounded-lg border text-center transition-colors duration-200 ${
-                  elapsedSecs >= 42 || status === "done"
-                    ? "bg-[#182232] border-[#f59e0b] text-[#f8fafc] font-medium"
-                    : "opacity-40"
-                }`}
-              >
-                4. Critic & Render
-              </div>
-            </div>
-
-            {status === "done" && (
-              <div className="mt-3 pt-2.5 flex items-center justify-between text-[#f59e0b]">
-                <span className="flex items-center gap-1.5 font-medium">
-                  <svg className="w-4 h-4 text-emerald-400 stroke-current" fill="none" viewBox="0 0 24 24" strokeWidth="2.5">
-                    <polyline points="20 6 9 17 4 12" />
-                  </svg>
-                  <span className="text-emerald-300">Run completed successfully! See posts below.</span>
-                </span>
-                <button
-                  type="button"
-                  onClick={() => setStatus("idle")}
-                  className="text-[#909dad] hover:text-[#f8fafc] underline cursor-pointer"
-                >
-                  Reset
-                </button>
-              </div>
-            )}
-
-            {errorMsg && (
-              <div className="mt-2 text-rose-400 font-medium">
-                Error: {errorMsg}
-              </div>
-            )}
-          </div>
-        )}
-
-        {/* Quick Sample Suggestions */}
         <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-          <span className="text-xs text-[#909dad] font-medium mr-1">
-            Try a sample:
-          </span>
-          {[
-            { label: "native.no", url: "https://native.no" },
-            { label: "tanyxai.com", url: "https://www.tanyxai.com" },
-            { label: "devrev.ai", url: "https://devrev.ai" },
-            { label: "inhabitr.ai", url: "https://inhabitr.ai" },
-          ].map((sample) => (
+          <span className="text-[12px] text-faint mr-1">Try</span>
+          {SAMPLES.map((s) => (
             <button
-              key={sample.label}
+              key={s.label}
               type="button"
-              onClick={() => handleSelectSample(sample.url)}
-              className="text-xs px-2.5 py-1 rounded-full bg-[#0c121d] hover:bg-[#182232] text-[#909dad] hover:text-[#f8fafc] border border-[#212c3d] hover:border-slate-500 transition-colors duration-150 cursor-pointer focus-visible:outline-none focus-visible:ring-1 focus-visible:ring-amber-400"
+              disabled={busy}
+              onClick={() => setUrl(s.url)}
+              className="text-[12px] h-7 px-3 rounded-full bg-surface hover:bg-sunken text-muted hover:text-ink border border-line hover:border-line-strong transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-default"
             >
-              {sample.label}
+              {s.label}
             </button>
           ))}
-        </div>
-
-        {/* MCP Connectors Footer Row (Just like Native.no, SVG icons) */}
-        <div className="mt-6 flex flex-wrap items-center justify-center gap-3">
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs text-[#909dad] bg-[#0c121d]/70 border border-[#212c3d] hover:border-slate-500 transition-colors duration-150 cursor-pointer">
-            <span className="w-1.5 h-1.5 rounded-full bg-emerald-400" />
-            <span>Connect Claude via MCP</span>
-          </div>
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs text-[#909dad] bg-[#0c121d]/70 border border-[#212c3d] hover:border-slate-500 transition-colors duration-150 cursor-pointer">
-            <span className="w-1.5 h-1.5 rounded-full bg-blue-400" />
-            <span>Connect ChatGPT via MCP</span>
-          </div>
-          <div className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs text-[#909dad] bg-[#0c121d]/70 border border-[#212c3d] hover:border-slate-500 transition-colors duration-150 cursor-pointer">
-            <span className="w-1.5 h-1.5 rounded-full bg-amber-400" />
-            <span>Connect Grok Bot via MCP</span>
-          </div>
         </div>
       </div>
     </section>

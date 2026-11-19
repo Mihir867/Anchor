@@ -62,7 +62,7 @@ export function PromptInput({
       }}
     >
       <div
-        className={`relative flex flex-col w-full rounded-2xl bg-[#0c121d]/90 backdrop-blur-xl border border-[#212c3d] hover:border-[#2d3a4d] focus-within:border-white/30 focus-within:ring-2 focus-within:ring-white/10 transition-all duration-200 shadow-[0_20px_50px_rgba(0,0,0,0.5)] ${className}`}
+        className={`relative flex flex-col w-full rounded-[22px] bg-surface border border-line hover:border-line-strong focus-within:border-ink/40 focus-within:ring-4 focus-within:ring-amber-100 transition-all duration-200 shadow-lift ${className}`}
       >
         {children}
       </div>
@@ -109,7 +109,7 @@ export function PromptInputTextarea({
       onChange={(e) => setValue(e.target.value)}
       onKeyDown={handleKeyDown}
       placeholder={placeholder}
-      className={`w-full bg-transparent px-4 pt-4 pb-2 text-[#f8fafc] placeholder-[#909dad] text-[15px] sm:text-base leading-relaxed resize-none outline-none border-none focus:outline-none focus:ring-0 font-sans tracking-normal ${className}`}
+      className={`w-full bg-transparent px-4 pt-4 pb-2 text-ink placeholder:text-faint text-[15px] sm:text-base leading-relaxed resize-none outline-none border-none focus:outline-none focus:ring-0 font-sans tracking-normal ${className}`}
       {...props}
     />
   );
@@ -126,7 +126,7 @@ export function PromptInputActions({
 }: PromptInputActionsProps) {
   return (
     <div
-      className={`flex items-center justify-between gap-3 px-3.5 pb-3 pt-1 border-t border-[#212c3d]/40 ${className}`}
+      className={`flex items-center justify-between gap-3 px-3.5 pb-3 pt-1  ${className}`}
     >
       {children}
     </div>

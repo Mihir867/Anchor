@@ -17,7 +17,6 @@ htmlcov/
 .mypy_cache/
 
 # Local Engine Runs & Outputs (to be persisted in DB / Cloud Storage later)
-runs/
 ai-engine/runs/
 
 # Node.js & Frontend dependencies

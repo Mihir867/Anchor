@@ -54,6 +54,7 @@ class TaskPack(BaseModel):
     industry: str
     industry_reason: str = ""
     max_posts: int = 3
+    script: str = "LATIN"  # writing system of the brand's own site; posts are written in it
     brand: BrandKit
     evidence: list[Evidence]
     pages_crawled: list[str] = Field(default_factory=list)
@@ -89,6 +90,8 @@ class Slide(BaseModel):
 
 
 class PostDraft(BaseModel):
+    voice: str = Field(default="", description="The register chosen for this fact: celebratory, "
+                       "authoritative, storyteller, inviting, urgent or insightful")
     linkedin: str
     instagram_caption: str
     hashtags: list[str] = Field(default_factory=list)

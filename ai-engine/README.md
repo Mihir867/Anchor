@@ -131,6 +131,22 @@ free tier (8k/min, 200k/day) cannot hold one. Before refining, the engine probes
 improver's endpoint. If its per-minute limit is below `ANCHOR_REFINE_MIN_TPM`, or its daily
 quota is spent, it runs one rollout instead and says so in `report.md`.
 
+## Storage (Postgres + Cloudinary)
+
+Optional; set in `ai-engine/.env` (see `.env.example`):
+
+- `DATABASE_URL` -- every job is written to Postgres as it moves queued -> running -> done/failed;
+  finished runs store their posts (copy, voice, slides, sources) in `runs` / `posts` / `assets`.
+  Tables are created on first use (`python -m anchor.storage init` to do it up front).
+- `CLOUDINARY_URL` (or `CLOUDINARY_CLOUD_NAME` / `_API_KEY` / `_API_SECRET`) -- slides and logos
+  upload as images, carousel PDFs as raw files, under `CLOUDINARY_FOLDER/<task_id>/`. Without it,
+  asset URLs point at the engine's `/static/runs/...`.
+- `python -m anchor.storage backfill` imports run folders already on disk (`--force` re-uploads).
+
+The Next.js client reads the same database server-side (`client/lib/db.ts`, `/api/runs*`) when its
+own `DATABASE_URL` is set, and falls back to this API otherwise. A storage failure never fails a
+run: the posts stay on disk and `backfill` re-syncs them.
+
 ## Cost
 
 - **Refine once, reuse often.** `--refine` runs Harness² (4 rollouts plus improver calls, about
