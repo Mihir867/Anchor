@@ -80,6 +80,31 @@ LOGO_SELECTORS = [
 ]
 
 
+class SiteBlocked(RuntimeError):
+    """The site answered with a bot-protection page (Vercel, Cloudflare, Akamai...) instead of
+    its content. Nothing to read; the site owner has to allow the crawler."""
+
+
+# Bot-protection interstitials, matched on the page title or its first visible text.
+_BLOCK_MARKERS = re.compile(
+    r"vercel security checkpoint|security checkpoint|just a moment\.\.\.|attention required|"
+    r"verify(ing)? (that )?you are (a )?human|we're verifying your browser|checking your browser|"
+    r"enable javascript and cookies to continue|pardon our interruption|access denied|ddos-guard|"
+    r"request unsuccessful\. incapsula|are you a robot",
+    re.I,
+)
+
+
+def blocked_reason(title: str, text: str) -> str | None:
+    """The block page's own wording when the page is a bot-protection interstitial, else None."""
+    head = f"{title} {text[:600]}"
+    m = _BLOCK_MARKERS.search(head)
+    # A real page can mention "access denied" deep in its copy; interstitials are short.
+    if m and (len(text) < 3000 or _BLOCK_MARKERS.search(title or "")):
+        return m.group(0)
+    return None
+
+
 @dataclass
 class Page:
     url: str
@@ -171,10 +196,18 @@ async def crawl_home(url: str, assets_dir: Path) -> CrawlResult:
         final_url = page.url
         tokens = await page.evaluate(TOKENS_JS)
         shot = assets_dir / "screenshot.png"
+        body_text = await page.evaluate("() => (document.body && document.body.innerText) || ''")
+        reason = blocked_reason(tokens.get("title", ""), body_text)
+        if reason:
+            await browser.close()
+            log.warning("[crawl] %s answered with a bot-protection page (%r); final url %s",
+                        url, reason, final_url)
+            raise SiteBlocked(f"{url} is behind bot protection ({reason!r}); the crawler was not let through")
         await page.screenshot(path=str(shot))
         logo = await _logo(page, assets_dir / "logo.png")
         html = await page.content()
         await browser.close()
+    log.info("[crawl] home %s: title=%r, %d chars of text", final_url, tokens.get("title", "")[:80], len(body_text))
     return CrawlResult(
         url=final_url, home=Page(final_url, html, tokens.get("title", "")), tokens=tokens,
         logo_path=logo, screenshot_path=str(shot),
@@ -269,7 +302,12 @@ async def crawl_pages(urls: list[str], limit: int, concurrency: int = 4) -> list
                     if not resp or resp.status >= 400:
                         return None
                     await pg.wait_for_timeout(1200)
-                    return Page(pg.url, await pg.content(), await pg.title())
+                    title = await pg.title()
+                    text = await pg.evaluate("() => (document.body && document.body.innerText) || ''")
+                    if blocked_reason(title, text):
+                        log.info("skip %s: bot-protection page", u)
+                        return None
+                    return Page(pg.url, await pg.content(), title)
                 except Exception as exc:
                     log.debug("skip %s: %s", u, exc)
                     return None

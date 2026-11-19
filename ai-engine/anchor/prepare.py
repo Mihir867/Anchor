@@ -113,6 +113,8 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
     ranked = sorted(site_items + news_items, key=lambda d: d.pop("_rank", 0), reverse=True)[:70]
     evidence = [Evidence(id=f"E{i}", **d) for i, d in enumerate(ranked, start=1)]
     if len(evidence) < MIN_EVIDENCE:
+        log.warning("[prepare] too little material for %s: %d site items from %d pages, %d news items",
+                    url, len(site_items), 1 + len(pages), len(news_items))
         raise PrepareError(
             f"only {len(evidence)} evidence items found for {url}; refusing to write posts without "
             "verifiable material (site may block crawlers or be mostly images)"

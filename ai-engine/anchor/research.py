@@ -30,8 +30,13 @@ def _bing(query: str, n: int = 8) -> list[dict]:
         r = httpx.get(url, headers={"User-Agent": UA}, timeout=12, follow_redirects=True)
         root = ET.fromstring(r.content)
     except Exception as exc:
-        log.warning("news search failed for %r: %s", query, exc)
+        status = getattr(locals().get("r"), "status_code", None)
+        log.warning("news search failed for %r (HTTP %s): %s", query, status, exc)
         return []
+    if not root.findall(".//item"):
+        # Search engines often answer datacenter IPs with an empty feed or a captcha page.
+        log.warning("news search for %r returned no items (HTTP %s, %d bytes, final url %s)",
+                    query, r.status_code, len(r.content), r.url)
     out = []
     for item in root.findall(".//item")[:n]:
         link = item.findtext("link") or ""

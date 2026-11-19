@@ -7,6 +7,19 @@ import { Pool } from "pg";
 import type { PostCard, RunItem, RunJobResponse } from "./api";
 import { PUBLIC_ERROR } from "./engine";
 
+// Known failure kinds get a specific, actionable message; anything else stays generic. The raw
+// error (stack traces, tool names) stays in the database and server logs.
+function publicError(raw: string | null): string {
+  if (!raw) return PUBLIC_ERROR;
+  if (raw.startsWith("SiteBlocked")) {
+    return "This website's security settings block automated visitors, so we couldn't read it. If it's your site, allow our crawler in your firewall or bot-protection settings, or try another URL.";
+  }
+  if (raw.startsWith("PrepareError")) {
+    return "We couldn't find enough on this website to write about. Try a site with more about the company's products, customers or news.";
+  }
+  return PUBLIC_ERROR;
+}
+
 // Engine stage names describe the pipeline; the browser gets neutral step ids instead.
 const STAGE_IDS: Record<string, string> = {
   crawling: "discover",
@@ -133,8 +146,7 @@ export async function dbGetRun(id: string): Promise<RunJobResponse | null> {
     job_id: run.id,
     status: run.status,
     stage: publicStage(run.stage, run.status),
-    // The raw error (stack traces, tool names) stays in the database and server logs.
-    error: run.status === "failed" ? PUBLIC_ERROR : undefined,
+    error: run.status === "failed" ? publicError(run.error) : undefined,
     request: run.request ? { url: run.request.url, mode: run.request.mode, posts: run.request.posts } : undefined,
     progress: publicProgress(run.progress),
     created_at: run.created_at.toISOString(),
