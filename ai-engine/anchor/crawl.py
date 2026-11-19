@@ -287,15 +287,39 @@ async def crawl_home(url: str, assets_dir: Path) -> CrawlResult:
             log.warning("[crawl] %s answered with a bot-protection page (%r); final url %s",
                         url, reason, final_url)
             raise SiteBlocked(f"{url} is behind bot protection ({reason!r}); the crawler was not let through")
-        await page.screenshot(path=str(shot))
+        shot_ok = await _screenshot(page, shot)
         logo = await _logo(page, assets_dir / "logo.png")
         html = await _slim_html(page)
         await browser.close()
     log.info("[crawl] home %s: title=%r, %d chars of text", final_url, tokens.get("title", "")[:80], len(body_text))
     return CrawlResult(
         url=final_url, home=Page(final_url, html, tokens.get("title", "")), tokens=tokens,
-        logo_path=logo, screenshot_path=str(shot),
+        logo_path=logo, screenshot_path=str(shot) if shot_ok else None,
     )
+
+
+async def _screenshot(page, out: Path) -> bool:
+    """Best-effort viewport screenshot. Playwright's screenshot waits for web fonts and a stable
+    frame; heavy pages (endless animations, slow font CDNs) on small instances can stall that
+    wait past its 30 s default and used to fail the whole run. The screenshot is optional
+    downstream, so: one bounded normal attempt, then a raw CDP capture that skips those waits,
+    then give up and continue without one."""
+    try:
+        await page.screenshot(path=str(out), timeout=15000, animations="disabled", caret="hide")
+        return True
+    except Exception as err:
+        log.warning("[crawl] screenshot failed (%s); retrying via CDP", str(err).splitlines()[0][:200])
+    try:
+        import base64
+        cdp = await page.context.new_cdp_session(page)
+        res = await asyncio.wait_for(
+            cdp.send("Page.captureScreenshot", {"format": "png", "captureBeyondViewport": False}), 15)
+        out.write_bytes(base64.b64decode(res["data"]))
+        return True
+    except Exception as err:
+        log.warning("[crawl] CDP screenshot failed too (%s); continuing without a screenshot",
+                    str(err).splitlines()[0][:200] if str(err) else type(err).__name__)
+        return False
 
 
 async def _logo(page, out: Path) -> str | None:
