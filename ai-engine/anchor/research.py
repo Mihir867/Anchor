@@ -97,13 +97,23 @@ def news_evidence(brand: str, domain: str, templates: list[str], max_articles: i
     queries = queries or [f'"{brand}" (launch OR partnership OR award OR announces) {year}']
     hits, seen = [], set()
     use_dfs = cfg is not None and cfg.dataforseo_news and market.enabled(cfg)
-    for q in queries:
-        # Google News via DataForSEO first (when configured), then Bing's RSS feed.
-        for h in (market.news_hits(q, cfg, geo=geo) if use_dfs else []) + _bing(q):
+    def keep(found: list[dict]) -> None:
+        for h in found:
             if (h["url"].startswith("http") and h["url"] not in seen and domain not in h["url"]
                     and dominant_script(h["title"], script) == script):
                 seen.add(h["url"])
                 hits.append(h)
+
+    google = 0
+    for q in queries:
+        # Google News via DataForSEO first (when configured), then Bing's RSS feed.
+        dfs = market.news_hits(q, cfg, geo=geo) if use_dfs else []
+        google += len(dfs)
+        keep(dfs + _bing(q))
+    if use_dfs and not google:
+        # Google News often rejects or finds nothing for the narrow boolean templates (40101);
+        # the bare quoted brand name reliably returns what coverage exists.
+        keep(market.news_hits(f'"{brand}"', cfg, geo=geo))
     with ThreadPoolExecutor(max_workers=6) as pool:
         results = list(pool.map(lambda h: _article(h, brand, domain, script), hits[: max_articles * 3]))
     items: list[dict] = []

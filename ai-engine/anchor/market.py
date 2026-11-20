@@ -67,8 +67,10 @@ def enabled(cfg: Settings) -> bool:
     return bool(cfg.dataforseo_login and cfg.dataforseo_password)
 
 
-def post(path: str, body: dict, cfg: Settings) -> list[dict]:
-    """POST one task to a DataForSEO live endpoint; returns its `result[0].items` (or [])."""
+def post(path: str, body: dict, cfg: Settings, retry_codes: frozenset[int] | None = None) -> list[dict]:
+    """POST one task to a DataForSEO live endpoint; returns its `result[0].items` (or []).
+
+    `retry_codes` overrides which task status codes get one more try (default _TRANSIENT)."""
     payload = [body]
     key = hashlib.sha256(json.dumps([path, payload], sort_keys=True).encode()).hexdigest()[:24]
     cache = cfg.cache_dir / "dataforseo" / f"{key}.json"
@@ -79,10 +81,11 @@ def post(path: str, body: dict, cfg: Settings) -> list[dict]:
             pass
     if _blocked:
         return []
-    items = _call(path, payload, cfg, retry=True)
+    codes = _TRANSIENT if retry_codes is None else retry_codes
+    items = _call(path, payload, cfg, retry=True, codes=codes)
     if items is _RETRY:
         time.sleep(2)
-        items = _call(path, payload, cfg, retry=False)
+        items = _call(path, payload, cfg, retry=False, codes=codes)
     if items is None:
         return []
     cache.parent.mkdir(parents=True, exist_ok=True)
@@ -93,10 +96,13 @@ def post(path: str, body: dict, cfg: Settings) -> list[dict]:
 _RETRY: list = []  # sentinel: a transient DataForSEO error worth one more try
 # 40101 Internal SE Server Error (the search-engine scrape failed), 50000 internal error,
 # 50301/50401 temporary unavailability: transient on DataForSEO's side.
-_TRANSIENT = {40101, 50000, 50301, 50401}
+_TRANSIENT = frozenset({40101, 50000, 50301, 50401})
+# Google News answers some queries with 40101 every time (long boolean queries with no matches,
+# e.g. '"Brand" (a OR b OR c OR d) 2026'), so retrying it there only costs ~20s per query.
+NEWS_RETRY = _TRANSIENT - {40101}
 
 
-def _call(path: str, payload: list, cfg: Settings, retry: bool):
+def _call(path: str, payload: list, cfg: Settings, retry: bool, codes: frozenset[int] = _TRANSIENT):
     """One live request: its items, None on a lasting failure, or _RETRY on a transient one
     (only when `retry`; the final attempt reports it as a failure)."""
     try:
@@ -122,7 +128,7 @@ def _call(path: str, payload: list, cfg: Settings, retry: bool):
         log.warning("DataForSEO %s failed: HTTP %s %s", path, r.status_code, data.get("status_message", r.text[:200]))
         return None
     if data.get("status_code") != 20000:
-        if retry and data.get("status_code") in _TRANSIENT:
+        if retry and data.get("status_code") in codes:
             log.info("DataForSEO %s: %s %s, retrying once", path, data.get("status_code"), data.get("status_message"))
             return _RETRY
         log.warning("DataForSEO %s: %s %s", path, data.get("status_code"), data.get("status_message"))
@@ -132,10 +138,14 @@ def _call(path: str, payload: list, cfg: Settings, retry: bool):
         _cost["calls"] += 1
         _cost["usd"] += float(task.get("cost") or 0)
     if task.get("status_code") != 20000:
-        if retry and task.get("status_code") in _TRANSIENT:
+        if retry and task.get("status_code") in codes:
             log.info("DataForSEO %s task: %s %s, retrying once", path, task.get("status_code"),
                      task.get("status_message"))
             return _RETRY
+        if task.get("status_code") == 40101 and path.startswith("serp/"):
+            # Google rejected this query (usually too narrow to match anything); callers fall back.
+            log.info("DataForSEO %s: Google rejected the query (40101), skipping it", path)
+            return None
         # 40501/40102 etc.: bad params, no data for this target, out of credit.
         log.warning("DataForSEO %s task: %s %s", path, task.get("status_code"), task.get("status_message"))
         return None
@@ -461,7 +471,7 @@ def news_hits(query: str, cfg: Settings, n: int = 10, geo: tuple[int, str] | Non
     items = post("serp/google/news/live/advanced",
                  {"keyword": query, **_geo(*(geo or (cfg.dataforseo_location_code or 2840,
                                                      cfg.dataforseo_language_code or "en"))),
-                  "depth": max(10, n)}, cfg)
+                  "depth": max(10, n)}, cfg, retry_codes=NEWS_RETRY)
     out = []
     for it in items:
         if it.get("type") != "news_search" or not it.get("url"):

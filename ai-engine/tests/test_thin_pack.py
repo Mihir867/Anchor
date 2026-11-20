@@ -73,8 +73,49 @@ def test_transient_dataforseo_error_is_retried_once(cfg, monkeypatch):
 
     monkeypatch.setattr(httpx, "post", post)
     market.reset_cost()
-    assert market.post("serp/google/news/live/advanced", {"keyword": "acme"}, cfg) == [{"x": 1}]
+    assert market.post("dataforseo_labs/google/ranked_keywords/live", {"target": "acme.example"}, cfg) == [{"x": 1}]
     assert replies == []
+
+
+def _task_error(code, calls):
+    def post(url, **kw):
+        calls.append(kw["json"][0].get("keyword"))
+        return httpx.Response(200, json={"status_code": 20000, "tasks": [{"status_code": code, "status_message": "x"}]},
+                              request=httpx.Request("POST", url))
+    return post
+
+
+def test_google_news_40101_is_not_retried(cfg, monkeypatch):
+    cfg = replace(cfg, dataforseo_login="l", dataforseo_password="p")
+    calls = []
+    monkeypatch.setattr(market.time, "sleep", lambda s: None)
+    monkeypatch.setattr(httpx, "post", _task_error(40101, calls))
+    market.reset_cost()
+    assert market.news_hits('"Acme" (a OR b OR c OR d) 2026', cfg) == []
+    assert len(calls) == 1
+
+
+def test_news_falls_back_to_the_bare_brand_when_google_finds_nothing(cfg, monkeypatch):
+    from anchor import research
+
+    cfg = replace(cfg, dataforseo_login="l", dataforseo_password="p", dataforseo_news=True)
+    asked = []
+
+    def hits(q, c, n=10, geo=None):
+        asked.append(q)
+        return [{"title": "Acme opens a studio", "url": "https://news.example/a", "date": None}] if q == '"Acme"' else []
+
+    monkeypatch.setattr(research.market, "news_hits", hits)
+    monkeypatch.setattr(research, "_bing", lambda q: [])
+    monkeypatch.setattr(research, "_article", lambda h, *a: [{"kind": "article", "url": h["url"], "text": "t"}])
+    items = research.news_evidence("Acme", "acme.example", ['"{brand_name}" (a OR b) {current_year}'], 3, cfg=cfg)
+    assert asked[-1] == '"Acme"' and [i["url"] for i in items] == ["https://news.example/a"]
+
+    asked.clear()
+    monkeypatch.setattr(research.market, "news_hits", lambda q, c, n=10, geo=None: asked.append(q) or
+                        [{"title": "Acme wins", "url": "https://news.example/b", "date": None}])
+    research.news_evidence("Acme", "acme.example", ['"{brand_name}" (a OR b) {current_year}'], 3, cfg=cfg)
+    assert '"Acme"' not in asked  # no fallback when the templates already found coverage
 
 
 def test_lasting_dataforseo_error_is_not_retried(cfg, monkeypatch):
