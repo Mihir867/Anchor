@@ -1,8 +1,10 @@
 "use client";
 
 import React, { useCallback, useEffect, useState } from "react";
-import { listRuns, RunItem, getRun, RunResult } from "@/lib/api";
+import { fetchRuns, RunItem, getRun, RunResult } from "@/lib/api";
 import { STAGES } from "@/lib/stages";
+import { Button } from "./ui/button";
+import { ChevronRightIcon, RefreshIcon, Spinner, Status } from "./ui/icons";
 
 interface RecentRunsSectionProps {
   onSelectRun: (res: RunResult) => void;
@@ -17,7 +19,7 @@ interface RecentRunsSectionProps {
 function ago(iso?: string) {
   if (!iso) return "";
   const s = (Date.now() - Date.parse(iso)) / 1000;
-  if (s < 60) return "just now";
+  if (s < 60) return "Just now";
   if (s < 3600) return `${Math.floor(s / 60)} min ago`;
   if (s < 86400) return `${Math.floor(s / 3600)} h ago`;
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" });
@@ -32,17 +34,51 @@ function host(r: RunItem) {
   }
 }
 
+// Shared column layout for the header, rows and skeleton rows.
+const COLS = "grid grid-cols-[minmax(0,1fr)_auto_20px] sm:grid-cols-[minmax(0,1.4fr)_minmax(0,1fr)_150px_96px_20px] items-center gap-4";
+
+function RunStatus({ r }: { r: RunItem }) {
+  if (r.status === "running" || r.status === "queued") {
+    const stage = STAGES.find((s) => s.id === r.stage);
+    return (
+      <span className="inline-flex items-center gap-2 text-[13px] text-fg-2 whitespace-nowrap">
+        <Spinner className="w-3 h-3 text-fg-3" />
+        {r.status === "queued" ? "Queued" : stage?.short || "Creating"}
+      </span>
+    );
+  }
+  if (r.status === "cancelled") return <Status tone="neutral">Stopped</Status>;
+  if (r.status === "failed") return <Status tone="danger">Didn&rsquo;t finish</Status>;
+  return (
+    <Status tone="success">
+      <span className="tabular-nums">
+        {r.verified_posts} post{r.verified_posts === 1 ? "" : "s"}
+      </span>
+    </Status>
+  );
+}
+
 export function RecentRunsSection({ onSelectRun, onAttach, selectedTaskId, activeJobId, refreshKey }: RecentRunsSectionProps) {
   const [runs, setRuns] = useState<RunItem[] | null>(null);
+  const [failed, setFailed] = useState(false);
+  const [refreshing, setRefreshing] = useState(false);
   const [loadingId, setLoadingId] = useState<string | null>(null);
+  const [openError, setOpenError] = useState<string | null>(null);
 
-  const load = useCallback(async () => setRuns(await listRuns()), []);
+  const load = useCallback(async () => {
+    try {
+      setRuns(await fetchRuns());
+      setFailed(false);
+    } catch {
+      setFailed(true);
+    }
+  }, []);
 
   useEffect(() => {
     load();
   }, [load, refreshKey]);
 
-  // While anything is in flight, keep the archive live.
+  // While anything is in flight, keep the library live.
   const anyRunning = runs?.some((r) => r.status === "running" || r.status === "queued");
   useEffect(() => {
     if (!anyRunning) return;
@@ -50,7 +86,14 @@ export function RecentRunsSection({ onSelectRun, onAttach, selectedTaskId, activ
     return () => clearInterval(t);
   }, [anyRunning, load]);
 
+  const refresh = async () => {
+    setRefreshing(true);
+    await load();
+    setRefreshing(false);
+  };
+
   const open = async (r: RunItem) => {
+    setOpenError(null);
     if (r.status === "running" || r.status === "queued") {
       onAttach(r.id, r.url || r.brand || "", (r.mode as "fast" | "refine") || "fast");
       return;
@@ -60,95 +103,133 @@ export function RecentRunsSection({ onSelectRun, onAttach, selectedTaskId, activ
     try {
       const data = await getRun(r.id);
       if (data.result) onSelectRun(data.result);
-    } catch (err) {
-      console.error("Failed to load run:", err);
+    } catch {
+      setOpenError(`Couldn't open the posts for ${host(r)}. Check your connection and try again.`);
     } finally {
       setLoadingId(null);
     }
   };
 
   return (
-    <section id="recent-runs" className="w-full max-w-6xl mx-auto px-4 sm:px-6 py-14">
-      <div className="flex items-end justify-between mb-6">
+    <section id="recent-runs" className="w-full max-w-[1120px] mx-auto px-5 sm:px-8 py-16 sm:py-24">
+      <header className="flex items-start justify-between gap-4">
         <div>
-          <h2 className="text-2xl font-semibold tracking-tight">Library</h2>
-          <p className="text-sm text-muted mt-1">Everything you&rsquo;ve created, in one place.</p>
+          <h2 className="text-2xl leading-[1.25] font-semibold tracking-[-0.015em]">Library</h2>
+          <p className="mt-1 text-sm text-fg-2">Every set of posts you have created.</p>
         </div>
-        <button
-          type="button"
-          onClick={load}
-          className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-full text-[13px] font-medium border border-line bg-surface hover:border-line-strong transition-colors cursor-pointer"
-        >
-          <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
-            <path strokeLinecap="round" strokeLinejoin="round" d="M4 4v5h.6m14.8 2A8 8 0 004.6 9m0 0H9m11 11v-5h-.6m0 0a8 8 0 01-15.4-2m15.4 2H15" />
-          </svg>
+        <Button variant="secondary" onClick={refresh} loading={refreshing}>
+          {!refreshing && <RefreshIcon className="w-3.5 h-3.5" />}
           Refresh
-        </button>
-      </div>
+        </Button>
+      </header>
 
-      {runs === null ? (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {[0, 1, 2].map((i) => (
-            <div key={i} className="h-[132px] rounded-2xl border border-line bg-surface p-5 space-y-3">
-              <div className="h-4 w-1/2 rounded skeleton" />
-              <div className="h-3 w-3/4 rounded skeleton" />
-            </div>
-          ))}
+      {openError && (
+        <p className="mt-4 text-[13px] text-danger" role="alert">
+          {openError}
+        </p>
+      )}
+
+      <div className="mt-6">
+        <div className={`${COLS} h-9 border-b border-border text-[13px] font-medium text-fg-3`}>
+          <span>Brand</span>
+          <span className="hidden sm:block">Website</span>
+          <span className="text-right sm:text-left">Status</span>
+          <span className="hidden sm:block text-right">Created</span>
+          <span />
         </div>
-      ) : runs.length === 0 ? (
-        <div className="p-10 rounded-2xl bg-surface border border-dashed border-line-strong text-center">
-          <div className="font-medium">Nothing here yet</div>
-          <p className="text-sm text-muted mt-1">Paste a website above and your first posts will show up here.</p>
-        </div>
-      ) : (
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 gap-4">
-          {runs.map((r) => {
-            const running = r.status === "running" || r.status === "queued";
-            const selected = selectedTaskId === r.task_id || selectedTaskId === r.id || activeJobId === r.id;
-            const stage = STAGES.find((s) => s.id === r.stage);
-            return (
-              <button
-                key={r.id}
-                type="button"
-                onClick={() => open(r)}
-                disabled={r.status === "failed" || r.status === "cancelled"}
-                className={`group text-left p-5 rounded-2xl border bg-surface transition-all cursor-pointer disabled:cursor-default flex flex-col justify-between min-h-[132px] ${
-                  selected ? "border-ink shadow-lift" : "border-line hover:border-line-strong hover:shadow-card hover:-translate-y-0.5"
-                }`}
-              >
-                <div>
-                  <div className="flex items-center justify-between gap-2">
-                    <span className="font-semibold text-[15px] truncate">{r.brand && !r.brand.includes("//") ? r.brand : host(r)}</span>
-                    {running ? (
-                      <span className="inline-flex items-center gap-1.5 text-[11px] font-medium px-2 py-0.5 rounded-full bg-brand-tint text-brand-deep border border-amber-200 shrink-0">
-                        <span className="w-1.5 h-1.5 rounded-full bg-brand animate-breathe" />
-                        {stage?.short || "Creating"}
+
+        {runs === null && !failed ? (
+          <ul aria-busy="true" aria-label="Loading library">
+            {[92, 78, 60].map((w) => (
+              <li key={w} className={`${COLS} h-12 border-b border-border-subtle`}>
+                <span className="h-3.5 skeleton" style={{ width: `${w}%` }} />
+                <span className="hidden sm:block h-3.5 skeleton w-[70%]" />
+                <span className="h-3.5 skeleton w-16" />
+                <span className="hidden sm:block h-3.5 skeleton w-14 ml-auto" />
+                <span />
+              </li>
+            ))}
+          </ul>
+        ) : failed && !runs ? (
+          <div className="py-10 max-w-[480px]">
+            <div className="text-sm font-medium text-fg">Couldn&rsquo;t load your library</div>
+            <p className="mt-1 text-sm text-fg-2">The server didn&rsquo;t respond. Check your connection, then try again.</p>
+            <Button variant="secondary" className="mt-4" onClick={refresh} loading={refreshing}>
+              Try again
+            </Button>
+          </div>
+        ) : runs && runs.length === 0 ? (
+          <div className="py-10 max-w-[480px]">
+            <div className="text-sm font-medium text-fg">No posts yet</div>
+            <p className="mt-1 text-sm text-fg-2">
+              Each set of posts you create appears here, so you can come back to copy or export it later.
+            </p>
+            <a
+              href="#generator"
+              className="mt-4 inline-block text-sm font-medium text-accent hover:underline underline-offset-2 rounded-sm"
+            >
+              Create your first posts
+            </a>
+          </div>
+        ) : (
+          <ul>
+            {runs!.map((r) => {
+              const running = r.status === "running" || r.status === "queued";
+              const openable = running || r.status === "done";
+              const selected = selectedTaskId === r.task_id || selectedTaskId === r.id || activeJobId === r.id;
+              const name = r.brand && !r.brand.includes("//") ? r.brand : host(r);
+              const cells = (
+                <>
+                  <span className="min-w-0">
+                    <span className="block truncate text-sm font-medium text-fg" title={name}>
+                      {name}
+                    </span>
+                    <span className="sm:hidden block truncate text-[13px] text-fg-3">
+                      {host(r)}, {ago(r.created_at).toLowerCase()}
+                    </span>
+                  </span>
+                  <span className="hidden sm:block truncate text-sm text-fg-2" title={host(r)}>
+                    {host(r)}
+                  </span>
+                  <span className="justify-self-end sm:justify-self-start">
+                    {loadingId === r.id ? (
+                      <span className="inline-flex items-center gap-2 text-[13px] text-fg-2">
+                        <Spinner className="w-3 h-3 text-fg-3" />
+                        Opening
                       </span>
-                    ) : r.status === "cancelled" ? (
-                      <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-sunken text-muted border border-line shrink-0">Stopped</span>
-                    ) : r.status === "failed" ? (
-                      <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-sunken text-muted border border-line shrink-0">Didn&rsquo;t finish</span>
                     ) : (
-                      <span className="text-[11px] font-medium px-2 py-0.5 rounded-full bg-ok-tint text-ok border border-emerald-200 shrink-0">
-                        {r.verified_posts} post{r.verified_posts === 1 ? "" : "s"}
-                      </span>
+                      <RunStatus r={r} />
                     )}
-                  </div>
-                  <div className="text-[13px] text-muted mt-1 truncate">{host(r)}</div>
-                </div>
-                <div className="mt-4 flex items-center justify-between text-[12px] text-faint">
-                  <span>
+                  </span>
+                  <span className="hidden sm:block text-right text-[13px] text-fg-3 tabular-nums whitespace-nowrap">
                     {ago(r.created_at)}
                   </span>
-                  <span className="text-ink-soft font-medium group-hover:text-ink">
-                    {loadingId === r.id ? "Opening…" : running ? "Follow →" : r.status === "done" ? "View →" : ""}
-                  </span>
-                </div>
-              </button>
-            );
-          })}
-        </div>
-      )}
+                  <span className="text-fg-3">{openable && <ChevronRightIcon className="w-4 h-4" />}</span>
+                </>
+              );
+              return (
+                <li key={r.id} className="border-b border-border-subtle">
+                  {openable ? (
+                    <button
+                      type="button"
+                      onClick={() => open(r)}
+                      aria-current={selected || undefined}
+                      aria-label={`${running ? "Follow" : "Open"} posts for ${name}`}
+                      className={`${COLS} w-full h-12 pointer-coarse:h-[52px] px-3 -mx-3 box-content text-left rounded-md cursor-pointer transition-colors duration-[120ms] ease-out ${
+                        selected ? "bg-accent-subtle" : "hover:bg-bg-subtle active:bg-bg-muted"
+                      }`}
+                    >
+                      {cells}
+                    </button>
+                  ) : (
+                    <div className={`${COLS} h-12 pointer-coarse:h-[52px]`}>{cells}</div>
+                  )}
+                </li>
+              );
+            })}
+          </ul>
+        )}
+      </div>
     </section>
   );
 }

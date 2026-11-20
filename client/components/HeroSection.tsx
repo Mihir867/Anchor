@@ -1,136 +1,175 @@
 "use client";
 
 import React, { useState } from "react";
-import { PromptInput, PromptInputTextarea, PromptInputActions, PromptInputAction } from "./prompt-kit/prompt-input";
 import type { StartPayload } from "@/lib/useRunJob";
+import { Button } from "./ui/button";
 
 interface HeroSectionProps {
   onStart: (payload: StartPayload) => void;
-  /** A run is in flight: the input is locked until it finishes. */
+  /** A run is in flight: the form is locked until it finishes. */
   busy: boolean;
 }
 
-const SAMPLES = [
-  { label: "native.no", url: "https://native.no" },
-  { label: "tanyxai.com", url: "https://www.tanyxai.com" },
-  { label: "devrev.ai", url: "https://devrev.ai" },
-  { label: "inhabitr.ai", url: "https://inhabitr.ai" },
+const SAMPLES = ["native.no", "tanyxai.com", "devrev.ai", "inhabitr.ai"];
+
+const MODES = [
+  { value: "fast", label: "Standard", hint: "One writing pass. The quickest option." },
+  { value: "refine", label: "Enhanced", hint: "Drafts several versions and keeps the strongest. Takes longer." },
+] as const;
+
+const INDUSTRIES = [
+  { value: "auto", label: "Detect automatically" },
+  { value: "saas", label: "SaaS" },
+  { value: "hospitality", label: "Hospitality" },
+  { value: "ecommerce", label: "E-commerce" },
+  { value: "general", label: "General" },
 ];
+
+/** Accepts "acme.com", "www.acme.com" or a full URL; returns "" when it cannot be a website. */
+function normalize(raw: string): string {
+  const v = raw.trim();
+  if (!v) return "";
+  try {
+    const u = new URL(v.includes("//") ? v : `https://${v}`);
+    return u.hostname.includes(".") ? u.toString() : "";
+  } catch {
+    return "";
+  }
+}
+
+const SELECT =
+  "h-8 pointer-coarse:h-11 w-full rounded-md border border-border bg-bg pl-3 pr-8 text-sm text-fg appearance-none cursor-pointer " +
+  "hover:border-border-strong transition-colors duration-[120ms] disabled:text-fg-disabled disabled:cursor-default " +
+  "bg-[url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%237b8191%22 stroke-width=%221.5%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22><path d=%22m6 9 6 6 6-6%22/></svg>')] bg-no-repeat bg-[length:16px] bg-[position:right_8px_center]";
 
 export function HeroSection({ onStart, busy }: HeroSectionProps) {
   const [url, setUrl] = useState("");
   const [mode, setMode] = useState<"fast" | "refine">("fast");
-  const [industry, setIndustry] = useState<string>("auto");
+  const [industry, setIndustry] = useState("auto");
+  const [error, setError] = useState<string | null>(null);
+  const [touched, setTouched] = useState(false);
 
-  const submit = () => {
-    const u = url.trim();
-    if (!u || busy) return;
-    onStart({ url: u, mode, industry: industry === "auto" ? null : industry, posts: 3 });
+  const validate = (v: string) => (normalize(v) ? null : "Enter a website like acme.com or https://www.acme.com");
+
+  const submit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (busy) return;
+    const err = validate(url);
+    setTouched(true);
+    setError(err);
+    if (err) return;
+    onStart({ url: normalize(url), mode, industry: industry === "auto" ? null : industry, posts: 3 });
   };
 
   return (
-    <section id="generator" className="relative w-full flex flex-col items-center px-4 pt-16 sm:pt-24 pb-14 overflow-hidden">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -top-48 left-1/2 -translate-x-1/2 w-[1100px] h-[620px] bg-[radial-gradient(ellipse_at_center,rgba(251,191,36,0.20),rgba(250,249,247,0)_65%)]"
-      />
-
-      <div className="relative inline-flex items-center gap-2 px-3 py-1 rounded-full bg-surface border border-line text-[12px] font-medium text-muted mb-7 shadow-card">
-        <svg className="w-3.5 h-3.5 text-brand" viewBox="0 0 24 24" fill="currentColor" aria-hidden>
-          <path d="M12 2L14.4 9.6L22 12L14.4 14.4L12 22L9.6 14.4L2 12L9.6 9.6L12 2Z" />
-        </svg>
-        Social posts, ready to publish
-      </div>
-
-      <h1 className="relative max-w-4xl text-center text-[44px] leading-[1.04] sm:text-6xl md:text-7xl font-semibold tracking-[-0.04em] text-ink">
-        Your brand,
-        <br />
-        <span className="bg-gradient-to-r from-amber-500 via-orange-500 to-rose-500 bg-clip-text text-transparent">verifiably</span> at its best.
+    <section id="generator" className="w-full max-w-[1120px] mx-auto px-5 sm:px-8 pt-16 sm:pt-24 pb-16 sm:pb-20">
+      <h1 className="max-w-[720px] text-[40px] sm:text-[56px] leading-[1.05] font-semibold tracking-[-0.025em] text-fg">
+        Social posts from your website, backed by sources.
       </h1>
-
-      <p className="relative max-w-xl text-center text-base sm:text-lg text-muted leading-relaxed mt-5 mb-10">
-        Paste your website. Get on-brand LinkedIn posts and Instagram carousels, written from your real wins and backed by
-        sources you can check.
+      <p className="mt-4 max-w-[560px] text-[17px] sm:text-lg leading-[1.6] tracking-[-0.005em] text-fg-2">
+        Paste your website. Anchor writes LinkedIn posts and Instagram carousels from what your brand has actually done,
+        in your colors and type, with a link to every source.
       </p>
 
-      <div className="relative w-full max-w-2xl z-10">
-        <PromptInput value={url} onValueChange={setUrl} onSubmit={submit} isLoading={busy}>
-          <PromptInputTextarea placeholder="Paste a website, e.g. https://www.salesforce.com" disabled={busy} aria-label="Brand website" />
-          <PromptInputActions>
-            <div className="flex items-center gap-2">
-              <div className="inline-flex p-0.5 rounded-full bg-sunken border border-line text-[12px] font-medium">
-                {(["fast", "refine"] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    disabled={busy}
-                    onClick={() => setMode(m)}
-                    className={`h-7 px-3 rounded-full transition-all cursor-pointer disabled:cursor-default ${
-                      mode === m ? "bg-surface text-ink shadow-card" : "text-muted hover:text-ink"
-                    }`}
-                  >
-                    {m === "fast" ? "Standard" : "Enhanced"}
-                  </button>
-                ))}
-              </div>
-              <select
-                value={industry}
-                disabled={busy}
-                onChange={(e) => setIndustry(e.target.value)}
-                aria-label="Industry"
-                className="h-8 bg-sunken text-muted hover:text-ink text-[12px] font-medium rounded-full pl-3 pr-2 border border-line outline-none cursor-pointer focus-visible:ring-2 focus-visible:ring-amber-200"
-              >
-                <option value="auto">Any industry</option>
-                <option value="saas">SaaS</option>
-                <option value="hospitality">Hospitality</option>
-                <option value="ecommerce">E-commerce</option>
-                <option value="general">General</option>
-              </select>
-            </div>
+      <form onSubmit={submit} noValidate className="mt-10 max-w-[640px]" aria-label="Create posts">
+        <label htmlFor="site" className="block text-[13px] font-medium text-fg-2">
+          Website
+        </label>
+        <div className="mt-1.5 flex flex-col sm:flex-row gap-2">
+          <input
+            id="site"
+            type="url"
+            inputMode="url"
+            autoComplete="url"
+            spellCheck={false}
+            placeholder="https://www.acme.com"
+            value={url}
+            disabled={busy}
+            aria-invalid={!!error}
+            aria-describedby="site-msg"
+            onChange={(e) => {
+              setUrl(e.target.value);
+              if (touched) setError(validate(e.target.value));
+            }}
+            onBlur={() => {
+              if (!url.trim()) return;
+              setTouched(true);
+              setError(validate(url));
+            }}
+            className={`flex-1 min-w-0 h-10 pointer-coarse:h-11 rounded-md border bg-bg px-3 text-base sm:text-[15px] text-fg placeholder:text-fg-3 outline-none transition-[border-color,box-shadow] duration-[120ms] ease-out disabled:text-fg-disabled disabled:bg-bg-subtle focus-visible:shadow-[0_0_0_2px_var(--color-accent-subtle)] ${
+              error ? "border-danger" : "border-border hover:border-border-strong focus:border-accent"
+            }`}
+          />
+          <Button type="submit" size="lg" loading={busy} className="sm:w-[148px]">
+            {busy ? "Creating" : "Create posts"}
+          </Button>
+        </div>
+        <p id="site-msg" className={`mt-1.5 min-h-[18px] text-[13px] ${error ? "text-danger" : "text-fg-3"}`} aria-live="polite">
+          {error ??
+            (busy ? "Your posts are being created below. You can start another run when this one finishes." : "")}
+        </p>
 
-            <PromptInputAction tooltip="Create posts">
+        <div className="mt-2 grid sm:grid-cols-2 gap-4">
+          <div>
+            <label htmlFor="mode" className="block text-[13px] font-medium text-fg-2">
+              Mode
+            </label>
+            <select
+              id="mode"
+              value={mode}
+              disabled={busy}
+              onChange={(e) => setMode(e.target.value as "fast" | "refine")}
+              className={`mt-1.5 ${SELECT}`}
+            >
+              {MODES.map((m) => (
+                <option key={m.value} value={m.value}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-[13px] text-fg-3">{MODES.find((m) => m.value === mode)?.hint}</p>
+          </div>
+          <div>
+            <label htmlFor="industry" className="block text-[13px] font-medium text-fg-2">
+              Industry
+            </label>
+            <select
+              id="industry"
+              value={industry}
+              disabled={busy}
+              onChange={(e) => setIndustry(e.target.value)}
+              className={`mt-1.5 ${SELECT}`}
+            >
+              {INDUSTRIES.map((i) => (
+                <option key={i.value} value={i.value}>
+                  {i.label}
+                </option>
+              ))}
+            </select>
+            <p className="mt-1.5 text-[13px] text-fg-3">Sets which playbook the posts follow.</p>
+          </div>
+        </div>
+
+        <p className="mt-6 text-[13px] text-fg-3">
+          Or try{" "}
+          {SAMPLES.map((s, i) => (
+            <React.Fragment key={s}>
               <button
                 type="button"
-                onClick={submit}
-                disabled={!url.trim() || busy}
-                className="inline-flex items-center gap-2 h-10 px-5 rounded-full font-semibold text-[14px] transition-all bg-ink text-white hover:bg-ink-soft active:scale-[0.98] shadow-card cursor-pointer disabled:bg-line disabled:text-faint disabled:shadow-none disabled:cursor-not-allowed"
+                disabled={busy}
+                onClick={() => {
+                  setUrl(`https://${s}`);
+                  setError(null);
+                }}
+                className="text-accent hover:underline underline-offset-2 rounded-sm cursor-pointer disabled:text-fg-disabled disabled:no-underline disabled:cursor-default"
               >
-                {busy ? (
-                  <>
-                    <svg className="animate-spin h-4 w-4" fill="none" viewBox="0 0 24 24">
-                      <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-                      <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8v8H4z" />
-                    </svg>
-                    Creating
-                  </>
-                ) : (
-                  <>
-                    Create posts
-                    <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth="2.5">
-                      <path d="M5 12h14M13 6l6 6-6 6" strokeLinecap="round" strokeLinejoin="round" />
-                    </svg>
-                  </>
-                )}
+                {s}
               </button>
-            </PromptInputAction>
-          </PromptInputActions>
-        </PromptInput>
-
-        <div className="mt-4 flex flex-wrap items-center justify-center gap-2">
-          <span className="text-[12px] text-faint mr-1">Try</span>
-          {SAMPLES.map((s) => (
-            <button
-              key={s.label}
-              type="button"
-              disabled={busy}
-              onClick={() => setUrl(s.url)}
-              className="text-[12px] h-7 px-3 rounded-full bg-surface hover:bg-sunken text-muted hover:text-ink border border-line hover:border-line-strong transition-colors cursor-pointer disabled:opacity-50 disabled:cursor-default"
-            >
-              {s.label}
-            </button>
+              {i < SAMPLES.length - 2 ? ", " : i === SAMPLES.length - 2 ? " or " : ""}
+            </React.Fragment>
           ))}
-        </div>
-      </div>
+        </p>
+      </form>
     </section>
   );
 }

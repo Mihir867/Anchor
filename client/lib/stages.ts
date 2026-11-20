@@ -35,24 +35,14 @@ export function estimatePercent(stage: string | undefined, p: RunProgress | unde
   return Math.round(s.from + (s.to - s.from) * Math.min(frac, 0.97));
 }
 
-/** One friendly live line for the current stage. */
+/** One plain live line for the current stage, from real progress data. */
 export function stageDetail(id: StageId, p: RunProgress = {}): string | null {
   switch (id) {
-    case "discover":
-      return p.brand ? `Hello, ${p.brand}` : null;
     case "write":
       return p.post ? `Post ${p.post} of ${Math.max(p.target ?? p.post, p.post)}` : null;
     case "design":
-      return p.verified ? `${p.verified} post${p.verified === 1 ? "" : "s"} in the studio` : null;
+      return p.verified ? `Designing ${p.verified} post${p.verified === 1 ? "" : "s"}` : null;
     default:
       return null;
   }
 }
-
-/** Rotating lines under the progress card: value, not mechanics. */
-export const TIPS = [
-  "Posts are built from what your brand has actually said and done, with sources you can check.",
-  "Visuals pick up your brand's own colors and type.",
-  "Each post comes with a LinkedIn version and an Instagram caption.",
-  "Copy any post in one click, or export the whole set.",
-];

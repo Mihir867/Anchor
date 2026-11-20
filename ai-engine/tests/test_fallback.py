@@ -78,3 +78,30 @@ def test_linked_pages_come_before_guessed_paths(monkeypatch):
     urls = crawl.candidate_urls(home, ["/integrations"], 8)
     assert urls[:2] == ["https://acme.com/customers", "https://acme.com/product/x"]
     assert "https://acme.com/integrations" in urls and "https://acme.com/login" not in urls
+
+
+def test_hanging_model_is_skipped_after_two_timeouts(cfg, monkeypatch):
+    import httpx
+    from dataclasses import replace
+
+    from anchor import llm
+
+    monkeypatch.setenv("GEMINI_API_KEY", "k")
+    monkeypatch.setattr(llm.time, "sleep", lambda s: None)
+    monkeypatch.setattr(llm, "_tripped", {})
+    calls = []
+
+    def post(url, json=None, **kw):
+        calls.append(json["model"])
+        if json["model"] == "hangs":
+            raise httpx.ReadTimeout("timed out")
+        body = {"choices": [{"message": {"content": "ok"}, "finish_reason": "stop"}], "usage": {}}
+        return httpx.Response(200, json=body, request=httpx.Request("POST", url))
+
+    monkeypatch.setattr(httpx, "post", post)
+    cfg = replace(cfg, fallback_models=[])
+    assert LLM("gemini:hangs,gemini:works", cfg=cfg).complete("s", "u") == "ok"
+    assert calls == ["hangs", "hangs", "works"]
+    # Later calls in the same process skip the hanging model straight away.
+    assert LLM("gemini:hangs,gemini:works", cfg=cfg).complete("s", "u") == "ok"
+    assert calls[3:] == ["works"]

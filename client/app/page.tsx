@@ -12,6 +12,26 @@ import { STAGES } from "@/lib/stages";
 
 const BASE_TITLE = "Anchor — On-brand social posts from your website";
 
+// A true sequence, so it is numbered.
+const STEPS = [
+  { title: "Paste your website", body: "Any company site works, from a one-page startup to a global brand." },
+  {
+    title: "Anchor reads and writes",
+    body: "It reads your pages and recent press, picks the stories worth telling and writes a post for each one.",
+  },
+  { title: "Review and publish", body: "Check each post against its sources, copy it in one click or export the whole set." },
+];
+
+const OUTPUTS = [
+  {
+    term: "A LinkedIn post",
+    body: "Written in your brand's voice, with the hook in the lines people see before \u201csee more\u201d.",
+  },
+  { term: "An Instagram caption", body: "A shorter version of the same story, with hashtags that fit it." },
+  { term: "Carousel slides", body: "Sized for the feed and set in your own colors and typography, ready to upload." },
+  { term: "Its sources", body: "A link to every page or article the post is based on, so you can check each claim." },
+];
+
 export default function Home() {
   const [current, setCurrent] = useState<RunResult | null>(null);
   const [fresh, setFresh] = useState(false);
@@ -27,7 +47,7 @@ export default function Home() {
     setRefreshKey((k) => k + 1);
     scrollToLive();
     if (document.visibilityState === "hidden") {
-      document.title = `✓ Posts ready for ${result.brand} — Anchor`;
+      document.title = `Posts ready for ${result.brand} — Anchor`;
       if (typeof Notification !== "undefined" && Notification.permission === "granted") {
         const n = new Notification("Your posts are ready", {
           body: `${result.verified_posts} post${result.verified_posts === 1 ? "" : "s"} for ${result.brand}`,
@@ -127,11 +147,11 @@ export default function Home() {
     <div className="min-h-screen flex flex-col">
       <Navbar activeLabel={activeLabel} />
 
-      <main className="flex-1 flex flex-col">
+      <main id="main" className="flex-1 flex flex-col">
         <HeroSection onStart={onStart} busy={busy} />
 
         {(showProgress || current) && (
-          <section ref={liveRef} id="live-run" className="w-full max-w-6xl mx-auto px-4 sm:px-6 scroll-mt-24">
+          <section ref={liveRef} id="live-run" className="w-full max-w-[1120px] mx-auto px-5 sm:px-8 scroll-mt-20">
             {showProgress ? (
               <RunProgress
                 state={state}
@@ -177,85 +197,53 @@ export default function Home() {
           }}
         />
 
-        <section id="features" className="max-w-6xl mx-auto px-4 sm:px-6 py-20 w-full border-t border-line">
-          <div className="text-center max-w-xl mx-auto mb-12">
-            <h2 className="text-3xl sm:text-4xl font-semibold tracking-tight">Posts you can stand behind.</h2>
-            <p className="mt-3 text-muted leading-relaxed">
-              Real stories from your brand, written to perform and designed to look like you.
-            </p>
+        <section id="how-it-works" className="w-full max-w-[1120px] mx-auto px-5 sm:px-8 py-16 sm:py-24 border-t border-border-subtle">
+          <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] gap-x-16 gap-y-8">
+            <div>
+              <h2 className="text-2xl leading-[1.25] font-semibold tracking-[-0.015em]">How Anchor works</h2>
+              <p className="mt-3 max-w-[400px] text-[17px] leading-[1.6] text-fg-2">
+                Posts come from what your brand has published and what the press has written about it. Anything Anchor
+                can&rsquo;t trace to a source is left out.
+              </p>
+            </div>
+            <ol className="border-t border-border-subtle">
+              {STEPS.map((step, i) => (
+                <li key={step.title} className="grid grid-cols-[28px_minmax(0,1fr)] sm:grid-cols-[28px_200px_minmax(0,1fr)] gap-x-4 gap-y-1 py-5 border-b border-border-subtle">
+                  <span className="text-sm text-fg-3 tabular-nums">{i + 1}</span>
+                  <h3 className="text-sm font-medium text-fg">{step.title}</h3>
+                  <p className="col-start-2 sm:col-start-3 text-sm leading-[1.6] text-fg-2">{step.body}</p>
+                </li>
+              ))}
+            </ol>
           </div>
 
-          <div className="grid grid-cols-1 md:grid-cols-3 gap-5">
-            {[
-              {
-                title: "Grounded in your story",
-                body: "Every post is built from what your brand has actually done: launches, customers, milestones and press. Each one links to its sources.",
-                foot: "Sources included",
-                icon: "M9 12l2 2 4-4m5.6-4.1A12 12 0 0112 3a12 12 0 01-8.6 2.9A12 12 0 003 9c0 5.6 3.8 10.3 9 11.6 5.2-1.3 9-6 9-11.6 0-1-.1-2.1-.4-3.1z",
-              },
-              {
-                title: "Written for each channel",
-                body: "A LinkedIn post and an Instagram caption for every story, with hooks that land before \u201csee more\u201d and hashtags that fit.",
-                foot: "LinkedIn + Instagram",
-                icon: "M8 10h8M8 14h5m-9 6l3-3h10a3 3 0 003-3V7a3 3 0 00-3-3H7a3 3 0 00-3 3v13z",
-              },
-              {
-                title: "Designed on-brand",
-                body: "Carousel slides in your own colors and typography, sized for the feed and ready to upload.",
-                foot: "Your colors, your type",
-                icon: "M4 5a1 1 0 011-1h14a1 1 0 011 1v14a1 1 0 01-1 1H5a1 1 0 01-1-1V5zm4 11l3-3 2 2 3-4 2 3",
-              },
-            ].map((f) => (
-              <div
-                key={f.title}
-                className="group p-7 rounded-3xl bg-surface border border-line shadow-card flex flex-col justify-between transition-all hover:-translate-y-0.5 hover:shadow-lift"
-              >
-                <div>
-                  <span className="w-10 h-10 rounded-2xl bg-brand-tint text-brand-deep flex items-center justify-center">
-                    <svg className="w-5 h-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={1.8} strokeLinecap="round" strokeLinejoin="round">
-                      <path d={f.icon} />
-                    </svg>
-                  </span>
-                  <h3 className="mt-5 text-lg font-semibold tracking-tight">{f.title}</h3>
-                  <p className="mt-2 text-[14px] text-muted leading-relaxed">{f.body}</p>
-                </div>
-                <div className="mt-6 pt-4 border-t border-line text-[12px] text-faint flex items-center gap-2">
-                  <span className="w-1.5 h-1.5 rounded-full bg-ok" />
-                  {f.foot}
-                </div>
-              </div>
-            ))}
-          </div>
-
-          <div className="mt-5 rounded-3xl border border-line bg-gradient-to-br from-amber-50 via-surface to-orange-50 p-8 sm:p-10">
-            <div className="grid sm:grid-cols-3 gap-6">
-              {[
-                ["1", "Paste your website", "Any company site works, from a startup landing page to a global brand."],
-                ["2", "We craft your posts", "Stories, copy and visuals, put together for you."],
-                ["3", "Copy and publish", "One click to copy, or export the whole set."],
-              ].map(([n, t, b]) => (
-                <div key={n} className="flex gap-3.5">
-                  <span className="w-7 h-7 shrink-0 rounded-full bg-ink text-white text-[12px] font-semibold flex items-center justify-center">{n}</span>
-                  <div>
-                    <div className="font-semibold tracking-tight">{t}</div>
-                    <p className="mt-1 text-[14px] text-muted leading-relaxed">{b}</p>
-                  </div>
+          <div className="mt-16 sm:mt-24 grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] gap-x-16 gap-y-8">
+            <h2 className="text-2xl leading-[1.25] font-semibold tracking-[-0.015em]">What you get for each post</h2>
+            <dl className="border-t border-border-subtle">
+              {OUTPUTS.map((o) => (
+                <div key={o.term} className="grid sm:grid-cols-[228px_minmax(0,1fr)] gap-x-4 gap-y-1 py-5 border-b border-border-subtle">
+                  <dt className="text-sm font-medium text-fg">{o.term}</dt>
+                  <dd className="text-sm leading-[1.6] text-fg-2">{o.body}</dd>
                 </div>
               ))}
-            </div>
+            </dl>
           </div>
         </section>
       </main>
 
-      <footer className="w-full border-t border-line py-8 text-[13px] text-muted">
-        <div className="max-w-6xl mx-auto px-4 sm:px-6 flex flex-col sm:flex-row items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <span className="font-semibold text-ink">Anchor</span>
-            <span>Social posts, ready to publish</span>
-          </div>
-          <a href="#generator" className="hover:text-ink">
-            Create posts ↑
-          </a>
+      <footer className="w-full border-t border-border">
+        <div className="max-w-[1120px] mx-auto px-5 sm:px-8 py-8 flex flex-col sm:flex-row sm:items-center justify-between gap-3 text-[13px] text-fg-2">
+          <span>
+            <span className="font-medium text-fg">Anchor</span> writes social posts from your website.
+          </span>
+          <nav className="flex gap-5" aria-label="Footer">
+            <a href="#generator" className="hover:text-fg transition-colors duration-[120ms] rounded-sm">
+              Create posts
+            </a>
+            <a href="#recent-runs" className="hover:text-fg transition-colors duration-[120ms] rounded-sm">
+              Library
+            </a>
+          </nav>
         </div>
       </footer>
     </div>

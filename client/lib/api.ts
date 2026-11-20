@@ -123,9 +123,14 @@ export interface RunJobResponse {
   };
 }
 
+/** The library; throws when it cannot be loaded (so an outage is not shown as "no runs"). */
+export async function fetchRuns(): Promise<RunItem[]> {
+  return fromDb<RunItem[]>("/api/runs");
+}
+
 export async function listRuns(): Promise<RunItem[]> {
   try {
-    return await fromDb<RunItem[]>("/api/runs");
+    return await fetchRuns();
   } catch (err) {
     console.error("Failed to list runs:", err);
     return [];

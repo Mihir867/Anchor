@@ -229,6 +229,14 @@ class LLM:
                     if exc.status in (401, 403, 404, 413, 499):
                         break  # bad key / unknown model / request too large here: try the next endpoint
                     raise LLMError(last) from None
+                except httpx.TimeoutException as exc:
+                    # A model that does not answer (provider-side hang) would otherwise hold this
+                    # call for 6 x the timeout. Two strikes: skip it for 10 minutes, use the next.
+                    last = f"{ep.spec}: {type(exc).__name__}: no reply within the timeout"
+                    if attempt >= 1:
+                        _trip(ep.spec, 600, "not responding")
+                        break
+                    time.sleep(2)
                 except httpx.HTTPError as exc:
                     last = f"{ep.spec}: {type(exc).__name__}: {exc}"
                     time.sleep(min(2 ** attempt, 20))

@@ -2,7 +2,9 @@
 
 import React, { useEffect, useRef, useState } from "react";
 import type { RunJobState } from "@/lib/useRunJob";
-import { STAGES, TIPS, estimatePercent, stageDetail, stageIndex } from "@/lib/stages";
+import { STAGES, estimatePercent, stageDetail, stageIndex } from "@/lib/stages";
+import { Button } from "./ui/button";
+import { CheckIcon, Spinner } from "./ui/icons";
 
 interface RunProgressProps {
   state: RunJobState;
@@ -20,8 +22,6 @@ function hostOf(url: string | null) {
     return url;
   }
 }
-
-const RING = 2 * Math.PI * 52;
 
 export function RunProgress({ state, onReset, onRetry, onCancel }: RunProgressProps) {
   const { phase, job, failures } = state;
@@ -60,16 +60,11 @@ export function RunProgress({ state, onReset, onRetry, onCancel }: RunProgressPr
   best.current = Math.max(best.current, raw);
   const pct = best.current;
 
-  const [tip, setTip] = useState(0);
-  useEffect(() => {
-    const t = setInterval(() => setTip((i) => (i + 1) % TIPS.length), 6500);
-    return () => clearInterval(t);
-  }, []);
-
   // Stop: ask once, inline, then stop.
   const [confirming, setConfirming] = useState(false);
   const [stopping, setStopping] = useState(false);
   const [stopError, setStopError] = useState<string | null>(null);
+  const keepRef = useRef<HTMLButtonElement>(null);
   useEffect(() => {
     setConfirming(false);
     setStopping(false);
@@ -77,6 +72,7 @@ export function RunProgress({ state, onReset, onRetry, onCancel }: RunProgressPr
   }, [state.jobId]);
   useEffect(() => {
     if (!confirming) return;
+    keepRef.current?.focus(); // focus the safe choice
     const t = setTimeout(() => setConfirming(false), 6000);
     return () => clearTimeout(t);
   }, [confirming]);
@@ -86,7 +82,7 @@ export function RunProgress({ state, onReset, onRetry, onCancel }: RunProgressPr
     try {
       await onCancel();
     } catch (err) {
-      setStopError(err instanceof Error ? err.message : "Couldn't stop right now. Please try again.");
+      setStopError(err instanceof Error ? err.message : "Couldn't stop the run. Try again.");
       setStopping(false);
       setConfirming(false);
     }
@@ -99,21 +95,18 @@ export function RunProgress({ state, onReset, onRetry, onCancel }: RunProgressPr
 
   if (phase === "failed") {
     return (
-      <div className="rounded-[28px] bg-surface border border-line shadow-lift p-8 sm:p-10 text-center animate-fade-up">
-        <div className="mx-auto w-12 h-12 rounded-2xl bg-red-50 text-bad flex items-center justify-center">
-          <svg className="w-6 h-6" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2}>
-            <path d="M12 8v5m0 3h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z" strokeLinecap="round" strokeLinejoin="round" />
-          </svg>
-        </div>
-        <div className="mt-4 text-xl font-semibold tracking-tight">We hit a snag{name ? ` with ${name}` : ""}</div>
-        <p className="mt-1.5 text-sm text-muted max-w-sm mx-auto">{state.error || "Something went wrong. Please try again."}</p>
-        <div className="mt-6 flex justify-center gap-2">
-          <button type="button" onClick={onRetry} className="h-10 px-5 rounded-full bg-ink text-white text-[13px] font-semibold hover:bg-ink-soft cursor-pointer">
-            Try again
-          </button>
-          <button type="button" onClick={onReset} className="h-10 px-5 rounded-full border border-line text-[13px] font-medium hover:bg-sunken cursor-pointer">
+      <div className="rounded-lg border border-border p-6 sm:p-8 animate-fade-up" role="alert">
+        <h2 className="text-lg leading-[1.35] font-semibold tracking-[-0.01em]">
+          Couldn&rsquo;t create posts{name ? ` for ${name}` : ""}
+        </h2>
+        <p className="mt-1 max-w-[560px] text-sm text-fg-2">
+          {state.error || "The run stopped before any posts were ready. Try again, or try another page of the same site."}
+        </p>
+        <div className="mt-5 flex gap-2">
+          <Button onClick={onRetry}>Try again</Button>
+          <Button variant="secondary" onClick={onReset}>
             Dismiss
-          </button>
+          </Button>
         </div>
       </div>
     );
@@ -121,158 +114,124 @@ export function RunProgress({ state, onReset, onRetry, onCancel }: RunProgressPr
 
   const active = current >= 0 && current < STAGES.length ? STAGES[current] : null;
   const detail = active ? stageDetail(active.id, progress) : null;
+  const step = Math.max(current + 1, 1);
 
   return (
-    <div className="relative rounded-[28px] bg-surface border border-line shadow-lift overflow-hidden animate-fade-up">
-      <div
-        aria-hidden
-        className="pointer-events-none absolute -top-40 -right-32 w-[520px] h-[420px] bg-[radial-gradient(ellipse_at_center,rgba(251,191,36,0.16),transparent_65%)]"
-      />
+    <div className="relative rounded-lg border border-border overflow-hidden animate-fade-up">
+      {/* 2px determinate bar along the top edge */}
+      <div className="absolute inset-x-0 top-0 h-0.5 bg-border-subtle" aria-hidden>
+        <div
+          className="h-full bg-accent origin-left transition-transform duration-[240ms] ease-out"
+          style={{ transform: `scaleX(${Math.max(pct, 2) / 100})` }}
+        />
+      </div>
 
-      {state.jobId && (
-        <div className="absolute top-4 right-4 z-10 flex items-center gap-2">
-          {confirming ? (
-            <div className="flex items-center gap-1.5 p-1 pl-3 rounded-full bg-surface border border-line shadow-card animate-fade-up">
-              <span className="text-[12px] text-ink-soft">Stop creating these posts?</span>
-              <button
-                type="button"
-                onClick={() => setConfirming(false)}
-                disabled={stopping}
-                className="h-7 px-3 rounded-full text-[12px] font-medium text-muted hover:text-ink cursor-pointer disabled:opacity-50"
-              >
-                Keep going
-              </button>
-              <button
-                type="button"
-                onClick={stop}
-                disabled={stopping}
-                className="h-7 px-3 rounded-full text-[12px] font-semibold bg-bad text-white hover:bg-red-700 cursor-pointer disabled:opacity-70 inline-flex items-center gap-1.5"
-              >
-                {stopping && (
-                  <svg className="w-3 h-3 animate-spin" viewBox="0 0 24 24" fill="none">
-                    <circle cx="12" cy="12" r="9" stroke="currentColor" strokeOpacity="0.35" strokeWidth="3" />
-                    <path d="M21 12a9 9 0 00-9-9" stroke="currentColor" strokeWidth="3" strokeLinecap="round" />
-                  </svg>
-                )}
-                {stopping ? "Stopping" : "Stop"}
-              </button>
-            </div>
-          ) : (
-            <button
-              type="button"
-              onClick={() => setConfirming(true)}
-              className="h-8 pl-2.5 pr-3.5 rounded-full border border-line bg-surface/90 backdrop-blur text-[12px] font-medium text-muted hover:text-bad hover:border-red-200 transition-colors cursor-pointer inline-flex items-center gap-1.5"
-            >
-              <span className="w-2.5 h-2.5 rounded-[3px] bg-current" aria-hidden />
-              Stop
-            </button>
-          )}
-        </div>
-      )}
-
-      <div className="relative grid md:grid-cols-[minmax(0,1fr)_minmax(0,1.15fr)]">
-        {/* Left: ring + current step */}
-        <div className="p-7 sm:p-10 flex flex-col items-center md:items-start text-center md:text-left">
-          <div className="relative w-32 h-32">
-            <svg className="w-full h-full -rotate-90" viewBox="0 0 120 120" aria-hidden>
-              <defs>
-                <linearGradient id="anchor-ring" x1="0" y1="0" x2="1" y2="1">
-                  <stop offset="0%" stopColor="#fbbf24" />
-                  <stop offset="100%" stopColor="#f97316" />
-                </linearGradient>
-              </defs>
-              <circle cx="60" cy="60" r="52" fill="none" stroke="var(--color-sunken)" strokeWidth="8" />
-              <circle
-                cx="60"
-                cy="60"
-                r="52"
-                fill="none"
-                stroke="url(#anchor-ring)"
-                strokeWidth="8"
-                strokeLinecap="round"
-                strokeDasharray={RING}
-                strokeDashoffset={RING * (1 - Math.max(pct, 2) / 100)}
-                className="transition-[stroke-dashoffset] duration-1000 ease-out"
-              />
-            </svg>
-            <div className="absolute inset-0 flex items-center justify-center">
-              <span className="text-3xl font-semibold tabular-nums tracking-tight">{pct}%</span>
-            </div>
-          </div>
-
-          <div className="mt-6 text-[12px] font-medium text-brand-deep inline-flex items-center gap-2">
-            <span className="relative flex w-2 h-2">
-              <span className="absolute inset-0 rounded-full bg-brand animate-ping opacity-60" />
-              <span className="relative w-2 h-2 rounded-full bg-brand" />
+      <header className="flex flex-col sm:flex-row sm:items-start justify-between gap-4 px-5 sm:px-6 pt-6 pb-5 border-b border-border-subtle">
+        <div className="min-w-0">
+          <h2 className="text-lg leading-[1.35] font-semibold tracking-[-0.01em] truncate">
+            Creating posts for {name || "your brand"}
+          </h2>
+          <p className="mt-1 text-sm text-fg-2" aria-live="polite">
+            <span className="tabular-nums">
+              Step {Math.min(step, STAGES.length)} of {STAGES.length}
             </span>
-            Creating for {name || "your brand"}
-          </div>
-          <h3 key={active?.id ?? "start"} className="mt-2 text-2xl sm:text-[28px] leading-tight font-semibold tracking-tight animate-fade-up">
-            {active ? active.title : "Getting things ready"}
-            <span className="inline-block w-6 text-left animate-breathe">…</span>
-          </h3>
-          <p className="mt-1.5 text-sm text-muted min-h-5">{detail}</p>
-
-          {/* Step track */}
-          <div className="mt-7 w-full flex items-center gap-1.5" aria-label={`Step ${Math.max(current + 1, 1)} of ${STAGES.length}`}>
-            {STAGES.map((s, i) => (
-              <span
-                key={s.id}
-                title={s.title}
-                className={`h-1.5 flex-1 rounded-full transition-colors duration-700 ${
-                  i < current ? "bg-ink" : i === current ? "bg-gradient-to-r from-amber-400 to-orange-500 animate-breathe" : "bg-sunken"
-                }`}
-              />
-            ))}
-          </div>
-
-          {failures > 2 && <div className="mt-3 text-[12px] text-brand-deep">Reconnecting…</div>}
-          {stopError && <div className="mt-3 text-[12px] text-bad">{stopError}</div>}
+            {", "}
+            {active ? active.title.toLowerCase() : "getting ready"}
+            {detail ? `. ${detail}` : ""}
+          </p>
+          {failures > 2 && <p className="mt-1 text-[13px] text-warning">Lost connection to the server. Reconnecting.</p>}
+          {stopError && <p className="mt-1 text-[13px] text-danger">{stopError}</p>}
         </div>
 
-        {/* Right: posts taking shape */}
-        <div className="p-7 sm:p-10 md:border-l border-t md:border-t-0 border-line bg-sunken/40">
-          <div className="text-[11px] font-semibold uppercase tracking-[0.1em] text-faint">Your posts</div>
-          <div className="mt-3 space-y-2.5">
-            {Array.from({ length: target }, (_, i) => i + 1).map((n) => {
+        {state.jobId && (
+          <div className="flex items-center gap-2 shrink-0">
+            {confirming ? (
+              <>
+                <span className="text-[13px] text-fg-2 mr-1">Stop creating these posts?</span>
+                <Button ref={keepRef} variant="secondary" onClick={() => setConfirming(false)} disabled={stopping}>
+                  Keep going
+                </Button>
+                <Button variant="destructive" onClick={stop} loading={stopping}>
+                  {stopping ? "Stopping" : "Stop run"}
+                </Button>
+              </>
+            ) : (
+              <Button variant="secondary" onClick={() => setConfirming(true)}>
+                Stop
+              </Button>
+            )}
+          </div>
+        )}
+      </header>
+
+      <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+        {/* Steps */}
+        <ol className="px-5 sm:px-6 py-4 md:border-r border-b md:border-b-0 border-border-subtle" aria-label="Steps">
+          {STAGES.map((s, i) => {
+            const done = i < current;
+            const now_ = i === current;
+            return (
+              <li key={s.id} className="flex items-center gap-3 h-9" aria-current={now_ ? "step" : undefined}>
+                <span className="w-4 flex justify-center">
+                  {done ? (
+                    <CheckIcon className="w-4 h-4 text-success" />
+                  ) : now_ ? (
+                    <Spinner className="w-3.5 h-3.5 text-accent" />
+                  ) : (
+                    <span className="w-1.5 h-1.5 rounded-full bg-border-strong" aria-hidden />
+                  )}
+                </span>
+                <span className={`text-sm transition-colors duration-[120ms] ${now_ ? "text-fg font-medium" : done ? "text-fg-2" : "text-fg-3"}`}>
+                  {s.title}
+                </span>
+              </li>
+            );
+          })}
+        </ol>
+
+        {/* Posts taking shape */}
+        <div className="px-5 sm:px-6 py-4">
+          <h3 className="text-[13px] font-medium text-fg-3 h-9 flex items-center">Posts</h3>
+          <ul className="border-t border-border-subtle">
+            {/* Extra rows appear when the engine writes backfill posts beyond the target. */}
+            {Array.from({ length: Math.max(target, progress?.post ?? 0) }, (_, i) => i + 1).map((n) => {
               const headline = drafts[n];
               const writing = stage === "write" && progress?.post === n;
-              const ready = !writing && (!!headline || (progress?.post ?? 0) > n || current > 3);
+              const drafted = !writing && (!!headline || (progress?.post ?? 0) > n || current > 3);
               return (
-                <div
-                  key={n}
-                  className={`p-4 rounded-2xl bg-surface border transition-all duration-500 ${
-                    writing ? "border-amber-300 shadow-card -translate-y-0.5" : "border-line"
-                  }`}
-                >
-                  <div className="flex items-center justify-between text-[11px] font-medium uppercase tracking-wide">
-                    <span className="text-muted">Post {n}</span>
+                <li key={n} className="flex items-center gap-4 h-12 border-b border-border-subtle">
+                  <span className="w-12 shrink-0 text-[13px] text-fg-3 tabular-nums">Post {n}</span>
+                  <span className="min-w-0 flex-1">
+                    {headline ? (
+                      <span className="block truncate text-sm font-medium text-fg animate-fade" title={headline}>
+                        {headline}
+                      </span>
+                    ) : drafted ? (
+                      // Opened mid-run: this headline was reported before we started following.
+                      <span className="block truncate text-[13px] text-fg-3">Headline shown when the run finishes</span>
+                    ) : (
+                      <span className="block h-3.5 skeleton" style={{ width: `${[78, 64, 70][(n - 1) % 3]}%` }} />
+                    )}
+                  </span>
+                  <span className="w-[76px] shrink-0 flex justify-end">
                     {writing ? (
-                      <span className="text-brand-deep animate-breathe">Writing</span>
-                    ) : ready ? (
-                      <span className="text-ok inline-flex items-center gap-1">
-                        <svg className="w-3 h-3 animate-pop" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={3}>
-                          <path d="M20 6L9 17l-5-5" strokeLinecap="round" strokeLinejoin="round" />
-                        </svg>
-                        Ready
+                      <span className="inline-flex items-center gap-1.5 text-[13px] text-fg-2">
+                        <Spinner className="w-3 h-3 text-fg-3" />
+                        Writing
+                      </span>
+                    ) : drafted ? (
+                      <span className="inline-flex items-center gap-1.5 text-[13px] text-fg-2">
+                        <CheckIcon className="w-3.5 h-3.5 text-success" />
+                        Drafted
                       </span>
                     ) : null}
-                  </div>
-                  {headline ? (
-                    <div className="mt-1.5 text-[14px] font-medium leading-snug line-clamp-2 animate-fade-up">{headline}</div>
-                  ) : (
-                    <div className="mt-2.5 space-y-1.5">
-                      <div className="h-3 rounded skeleton w-[85%]" />
-                      <div className="h-3 rounded skeleton w-[55%]" />
-                    </div>
-                  )}
-                </div>
+                  </span>
+                </li>
               );
             })}
-          </div>
-
-          <p key={tip} className="mt-6 text-[13px] text-ink-soft leading-relaxed min-h-[40px] animate-fade-up">
-            {TIPS[tip]}
+          </ul>
+          <p className="mt-4 text-[13px] text-fg-3">
+            You can leave this page. The run continues and appears in your library when it finishes.
           </p>
         </div>
       </div>

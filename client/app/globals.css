@@ -1,55 +1,82 @@
 @import "tailwindcss";
 
-/* Light, warm-neutral theme. Ink for primary actions, amber as the brand accent. */
+/* Design tokens (refined-saas-ui). Components read tokens only; never hardcode hex in markup.
+   Cool near-neutral greys and one accent. Change --color-accent* to rebrand. */
 @theme {
-  --color-canvas: #faf9f7;
-  --color-surface: #ffffff;
-  --color-sunken: #f4f2ee;
-  --color-ink: #16130f;
-  --color-ink-soft: #3d3832;
-  --color-muted: #6f6a63;
-  --color-faint: #a39e96;
-  --color-line: #e8e4dd;
-  --color-line-strong: #d6d0c6;
-  --color-brand: #f59e0b;
-  --color-brand-deep: #b45309;
-  --color-brand-tint: #fef3c7;
-  --color-ok: #059669;
-  --color-ok-tint: #ecfdf5;
-  --color-bad: #dc2626;
+  /* surfaces */
+  --color-bg: #ffffff;
+  --color-bg-subtle: #f7f8fa; /* row hover, side panels, preview stage */
+  --color-bg-muted: #f0f1f4; /* pressed rows, skeleton base */
+  --color-bg-overlay: #ffffff;
+
+  /* borders */
+  --color-border: #e6e8ec;
+  --color-border-subtle: #eef0f3;
+  --color-border-strong: #d3d6dd;
+
+  /* text */
+  --color-fg: #14171f;
+  --color-fg-2: #4b5262;
+  --color-fg-3: #7b8191;
+  --color-fg-disabled: #b3b8c4;
+
+  /* accent: primary action, links, focus, selection. Nothing else. */
+  --color-accent: #4f5bd5;
+  --color-accent-hover: #424dc0;
+  --color-accent-active: #3a44ab;
+  --color-accent-subtle: #eef0fd;
+
+  /* status: real status only */
+  --color-success: #1f9d63;
+  --color-warning: #b7791f;
+  --color-danger: #d93a3a;
+  --color-danger-hover: #c23232;
+  --color-success-subtle: #e9f6ef;
+  --color-warning-subtle: #fbf3e2;
+  --color-danger-subtle: #fcecec;
 
   --font-sans: var(--font-inter), -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  --font-mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
+  --font-mono: ui-monospace, "SF Mono", Menlo, monospace;
   /* Social previews use each platform's own system font stack. */
   --font-platform: -apple-system, system-ui, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue",
     "Fira Sans", Ubuntu, Oxygen, "Oxygen Sans", Cantarell, "Droid Sans", "Apple Color Emoji",
     "Segoe UI Emoji", "Segoe UI Symbol", "Lucida Grande", Helvetica, Arial, sans-serif;
 
-  --shadow-card: 0 1px 2px rgba(22, 19, 15, 0.04), 0 4px 16px -4px rgba(22, 19, 15, 0.06);
-  --shadow-lift: 0 2px 4px rgba(22, 19, 15, 0.04), 0 18px 48px -12px rgba(22, 19, 15, 0.18);
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
 
-  --animate-shimmer: shimmer 1.6s linear infinite;
-  --animate-fade-up: fade-up 0.45s cubic-bezier(0.2, 0.7, 0.2, 1) both;
+  /* shadows only on floating layers */
+  --shadow-popover: 0 0 0 1px rgba(20, 23, 31, 0.06), 0 4px 12px rgba(20, 23, 31, 0.08), 0 1px 2px rgba(20, 23, 31, 0.04);
+  --shadow-modal: 0 0 0 1px rgba(20, 23, 31, 0.06), 0 16px 40px rgba(20, 23, 31, 0.12), 0 2px 6px rgba(20, 23, 31, 0.06);
+
+  --ease-out: cubic-bezier(0.2, 0, 0, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --ease-inout: cubic-bezier(0.4, 0, 0.2, 1);
+
+  /* 160ms, 4px: content appearing after a user action or data change */
+  --animate-fade-up: enter 160ms var(--ease-out) both;
+  --animate-fade: fade 120ms var(--ease-out) both;
+  /* Used only inside the Instagram preview, mirroring the platform's own like feedback. */
   --animate-pop: pop 0.45s cubic-bezier(0.2, 1.6, 0.4, 1) both;
   --animate-heart: heart 0.9s ease-out both;
-  --animate-breathe: breathe 2.4s ease-in-out infinite;
 
-  @keyframes shimmer {
-    from {
-      background-position: -400px 0;
-    }
-    to {
-      background-position: 400px 0;
-    }
-  }
-  @keyframes fade-up {
+  @keyframes enter {
     from {
       opacity: 0;
-      transform: translateY(8px);
+      transform: translateY(4px);
     }
     to {
       opacity: 1;
       transform: none;
+    }
+  }
+  @keyframes fade {
+    from {
+      opacity: 0;
+    }
+    to {
+      opacity: 1;
     }
   }
   @keyframes pop {
@@ -85,34 +112,56 @@
       transform: scale(1) translateY(-12px);
     }
   }
-  @keyframes breathe {
-    0%,
-    100% {
-      opacity: 0.55;
-    }
-    50% {
-      opacity: 1;
-    }
-  }
+}
+
+:root {
+  --focus-ring: 0 0 0 2px var(--color-bg), 0 0 0 4px var(--color-accent);
 }
 
 html {
-  scroll-behavior: smooth;
+  font-feature-settings: "cv11", "ss03", "calt";
+  scroll-padding-top: 72px;
 }
 
 body {
-  background-color: var(--color-canvas);
-  color: var(--color-ink);
+  background-color: var(--color-bg);
+  color: var(--color-fg);
   font-family: var(--font-sans);
   text-rendering: optimizeLegibility;
   -webkit-font-smoothing: antialiased;
   -moz-osx-font-smoothing: grayscale;
 }
 
+/* Keyboard focus is always visible; mouse clicks never show it. Appears instantly. */
+:where(a, button, input, select, textarea, summary, [tabindex]):focus-visible {
+  outline: none;
+  box-shadow: var(--focus-ring);
+}
+
+::selection {
+  background: var(--color-accent-subtle);
+  color: var(--color-fg);
+}
+
+/* Skeleton: the real layout with placeholder blocks. The shimmer is the one permitted gradient. */
 .skeleton {
-  background: linear-gradient(90deg, #efebe5 0px, #f8f6f2 120px, #efebe5 240px);
-  background-size: 800px 100%;
-  animation: var(--animate-shimmer);
+  background: var(--color-bg-muted);
+  border-radius: var(--radius-sm);
+  position: relative;
+  overflow: hidden;
+}
+.skeleton::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.55), transparent);
+  transform: translateX(-100%);
+  animation: shimmer 1.6s var(--ease-inout) infinite;
+}
+@keyframes shimmer {
+  to {
+    transform: translateX(100%);
+  }
 }
 
 .no-scrollbar {
@@ -129,5 +178,9 @@ body {
     animation-duration: 0.01ms !important;
     animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+  .skeleton::after {
+    animation: none;
   }
 }
