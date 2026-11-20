@@ -7,8 +7,9 @@ schema_types: [SoftwareApplication, WebApplication, MobileApplication]
 crawl_paths: [/customers, /case-studies, /changelog, /blog, /newsroom, /press, /integrations, /pricing, /security, /features]
 news_queries:
   - '"{brand_name}" (launches OR announces OR partnership OR integration OR acquires) {current_year}'
-  - '"{brand_name}" (funding OR "Series A" OR "Series B" OR customers OR "case study")'
-  - '"{brand_name}" (AI OR platform OR release OR general availability)'
+  - '"{brand_name}" (funding OR "Series A" OR "Series B" OR customers OR "case study") {current_year}'
+  - '"{brand_name}" (AI OR platform OR release OR general availability) {current_year}'
+time_sensitive: [Release, Partnership]
 post_types: [Customer story, Release, Feature how-to, Proof point, Integration, Partnership, Behind the build, Our take, Answer, Event]
 banned_phrases: [all-in-one platform, best-in-class, world-class, paradigm shift, synergy, empower your team, the future of work, 10x your]
 ---
@@ -23,7 +24,7 @@ the industry. They want proof, specifics and ways to get more out of the product
   case study, testimonial or press. Open on the customer's problem, then what changed, then the
   number. Best-performing type; pick it whenever the evidence has one.
 - **Release**: a launch, GA or changelog entry with a concrete capability. Needs a dated item
-  from the last 18 months. Say what it does and who it is for, not that it is "new and exciting".
+  from the last 60 days; an older release is not news (write a Feature how-to instead). Say what it does and who it is for, not that it is "new and exciting".
 - **Feature how-to**: one specific capability explained for people who already use or evaluate
   the product: what it does step by step, a setting, a workflow. Undated feature pages belong
   here, framed as "here is how to use X", never as an introduction to the product.
@@ -31,6 +32,7 @@ the industry. They want proof, specifics and ways to get more out of the product
   number or open-source milestone, with what it means for the reader's setup.
 - **Integration**: a named integration and the job it does in a workflow.
 - **Partnership**: funding, acquisition or partnership with named parties and amounts as stated.
+  Needs a dated item from the last 60 days; an older deal is not news, never post it.
 - **Behind the build**: why or how we built something, from our blog or engineering posts.
 - **Our take**: our point of view on a problem in the industry, anchored to something we wrote
   or did (a blog argument, a product decision). Opinion framed as ours; facts from evidence.

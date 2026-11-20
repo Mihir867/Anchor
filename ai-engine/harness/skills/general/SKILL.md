@@ -7,7 +7,8 @@ schema_types: [Organization, LocalBusiness, ProfessionalService, NGO, Educationa
 crawl_paths: [/about, /news, /press, /blog, /work, /projects, /clients, /services, /impact]
 news_queries:
   - '"{brand_name}" (announces OR launches OR partnership OR award) {current_year}'
-  - '"{brand_name}" (expands OR opens OR appoints OR milestone)'
+  - '"{brand_name}" (expands OR opens OR appoints OR milestone) {current_year}'
+time_sensitive: [News, Award]
 post_types: [Client story, News, Award, How we work, Proof point, Our take, Team, Answer, Event]
 banned_phrases: [world-class, best-in-class, one-stop shop, second to none, unparalleled]
 ---
@@ -20,8 +21,9 @@ them work, results and thinking they have not seen yet.
 ## Post types (set `category` to one of these)
 - **Client story**: named client work or an outcome, as stated.
 - **News**: an opening, partnership, appointment or expansion. Needs a dated item from the last
-  18 months.
-- **Award**: a recognition named exactly, with year if stated.
+  60 days.
+- **Award**: a recognition named exactly. Needs a dated item from the last 60 days; last
+  year's award is old news.
 - **How we work**: one specific part of the service or method, with a concrete detail.
 - **Proof point**: a concrete milestone (years in operation, people served, projects delivered),
   numbers as stated.

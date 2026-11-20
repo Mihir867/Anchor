@@ -2,6 +2,10 @@
 
 Articles must mention the brand by name (or domain) in their body, or they are dropped:
 for common-word brand names, search engines return unrelated stories.
+
+Articles must also be recent: a hit older than `max_days` (search date, or the article page's
+own published date when the search result has none) is dropped, and so is one with no date at
+all -- old press would otherwise be posted as if it were news.
 """
 
 from __future__ import annotations
@@ -20,8 +24,8 @@ from bs4 import BeautifulSoup
 from . import market
 from .config import Settings
 from .crawl import UA
-from .extract import clean, informativeness, prose
-from .verify import dominant_script, norm
+from .extract import clean, informativeness, json_ld, page_date, prose
+from .verify import EVIDENCE_DAYS, age_days, dominant_script, norm
 
 log = logging.getLogger("anchor.research")
 
@@ -58,7 +62,8 @@ def _date(raw: str) -> str | None:
         return None
 
 
-def _article(hit: dict, brand: str, domain: str, script: str = "LATIN") -> list[dict]:
+def _article(hit: dict, brand: str, domain: str, script: str = "LATIN",
+             max_days: int = EVIDENCE_DAYS) -> list[dict]:
     try:
         r = httpx.get(hit["url"], headers={"User-Agent": UA}, timeout=12, follow_redirects=True)
         if r.status_code != 200 or "html" not in r.headers.get("content-type", ""):
@@ -66,6 +71,12 @@ def _article(hit: dict, brand: str, domain: str, script: str = "LATIN") -> list[
     except httpx.HTTPError:
         return []
     soup = BeautifulSoup(r.text, "html.parser")
+    published = hit.get("date") or page_date(soup, json_ld(soup))
+    age = age_days(published)
+    if age is None or age > max_days:
+        log.info("skip %s: %s", hit["url"], f"published {published}, older than {max_days} days"
+                 if published else "no publication date")
+        return []
     for tag in soup.find_all(["nav", "header", "footer", "aside", "script", "style", "form"]):
         tag.decompose()
     root = soup.find("article") or soup.find("main") or soup.body
@@ -85,13 +96,14 @@ def _article(hit: dict, brand: str, domain: str, script: str = "LATIN") -> list[
     lead = paras[:1]
     rest = sorted(paras[1:], key=informativeness, reverse=True)[:2]
     chunks = [p for p in lead + rest if norm(brand) in norm(p) or informativeness(p) > 4]
-    return [{"kind": "article", "url": str(r.url), "title": hit["title"], "date": hit["date"], "text": c[:900],
+    return [{"kind": "article", "url": str(r.url), "title": hit["title"], "date": published[:10], "text": c[:900],
              "_rank": informativeness(c) + 2.5} for c in chunks]
 
 
 def news_evidence(brand: str, domain: str, templates: list[str], max_articles: int,
                   script: str = "LATIN", cfg: Settings | None = None,
-                  geo: tuple[int, str] | None = None) -> list[dict]:
+                  geo: tuple[int, str] | None = None, max_days: int | None = None) -> list[dict]:
+    max_days = max_days or (cfg.evidence_max_days if cfg else EVIDENCE_DAYS)
     year = datetime.now().year
     queries = [t.replace("{brand_name}", brand).replace("{current_year}", str(year)) for t in templates[:3]]
     queries = queries or [f'"{brand}" (launch OR partnership OR award OR announces) {year}']
@@ -99,8 +111,9 @@ def news_evidence(brand: str, domain: str, templates: list[str], max_articles: i
     use_dfs = cfg is not None and cfg.dataforseo_news and market.enabled(cfg)
     def keep(found: list[dict]) -> None:
         for h in found:
+            age = age_days(h.get("date"))
             if (h["url"].startswith("http") and h["url"] not in seen and domain not in h["url"]
-                    and dominant_script(h["title"], script) == script):
+                    and dominant_script(h["title"], script) == script and (age is None or age <= max_days)):
                 seen.add(h["url"])
                 hits.append(h)
 
@@ -114,13 +127,15 @@ def news_evidence(brand: str, domain: str, templates: list[str], max_articles: i
         # Google News often rejects or finds nothing for the narrow boolean templates (40101);
         # the bare quoted brand name reliably returns what coverage exists.
         keep(market.news_hits(f'"{brand}"', cfg, geo=geo))
+    # Newest first (undated last: their page date is checked when the article is read).
+    hits.sort(key=lambda h: h.get("date") or "", reverse=True)
     with ThreadPoolExecutor(max_workers=6) as pool:
-        results = list(pool.map(lambda h: _article(h, brand, domain, script), hits[: max_articles * 3]))
+        results = list(pool.map(lambda h: _article(h, brand, domain, script, max_days), hits[: max_articles * 3]))
     items: list[dict] = []
     used = 0
     for chunks in results:
         if chunks and used < max_articles:
             items += chunks
             used += 1
-    log.info("News: %d candidate links, %d on-topic articles kept", len(hits), used)
+    log.info("News: %d recent candidate links, %d on-topic articles kept (max age %d days)", len(hits), used, max_days)
     return items

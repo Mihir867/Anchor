@@ -52,7 +52,7 @@ def test_launch_needs_a_recent_dated_item():
         "AI renovation budgets: AI-powered hotel renovation budget estimates in minutes."))}
     fact = MinedFact(headline="Tanyx launches AI renovation budgets", category="Launch", evidence_ids=["E1"],
                      quote="AI-powered hotel renovation budget estimates in minutes.", why_it_matters="w")
-    assert any("announces something new" in p for p in check_fact(fact, undated, "Tanyx"))
+    assert any("is news" in p for p in check_fact(fact, undated, "Tanyx"))
     assert not check_fact(fact.model_copy(update={"category": "Feature how-to"}), undated, "Tanyx")
     recent = {"E1": undated["E1"].model_copy(update={"date": (date.today() - timedelta(days=30)).isoformat()})}
     assert not check_fact(fact, recent, "Tanyx")

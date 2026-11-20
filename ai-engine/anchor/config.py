@@ -79,6 +79,12 @@ class Settings:
     # Evidence seen on a brand's earlier runs within this many days is pooled into new runs
     # (crawls of the same site see different pages). 0 turns pooling off.
     evidence_pool_days: float = field(default_factory=lambda: float(_env("ANCHOR_EVIDENCE_POOL_DAYS", "60")))
+    # Freshness: followers only care about what is current. Time-sensitive posts (release, launch,
+    # partnership, funding, award, opening...) need a cited item dated within news_max_days; any
+    # dated evidence older than evidence_max_days is dropped from the pack (undated live site
+    # copy is kept and can only back evergreen posts).
+    news_max_days: int = field(default_factory=lambda: int(_env("ANCHOR_NEWS_MAX_DAYS", "60")))
+    evidence_max_days: int = field(default_factory=lambda: int(_env("ANCHOR_EVIDENCE_MAX_DAYS", "100")))
     detail_slides: int = field(default_factory=lambda: int(_env("ANCHOR_DETAIL_SLIDES", "2")))
     # DataForSEO (optional): competitors, search demand and content gaps (market.py), plus Google
     # News results for press research. Unset login/password = the step is skipped.

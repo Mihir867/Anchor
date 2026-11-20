@@ -96,6 +96,7 @@ class TaskPack(BaseModel):
     thin: bool = False
     thin_reason: str = ""
     pooled_evidence: int = 0  # evidence items carried over from this brand's earlier runs
+    stale_dropped: int = 0  # dated items older than ANCHOR_EVIDENCE_MAX_DAYS left out of the pack
 
     def evidence_by_id(self) -> dict[str, Evidence]:
         return {e.id: e for e in self.evidence}

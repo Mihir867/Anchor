@@ -5,9 +5,15 @@ Your output is machine-checked after every stage. Knowing the checks saves repai
 Fact selection
 - `category` is the POST TYPE: one of the loaded skill's post types, spelled as listed there.
   A set of posts should use different post types; never pick two facts about the same topic.
-- Types that announce something new (Release, Launch, Opening, Collection drop, News) need a
-  DATED cited item from the last 18 months. Undated site copy is a Feature spotlight, How-to or
-  Proof point, never a launch.
+- Freshness is checked in code. Time-sensitive types (the skill's `time_sensitive` list, plus
+  anything named like a release, launch, partnership, funding, award or opening) need a DATED
+  cited item from the last 60 days. Undated site copy is a Feature how-to, Spotlight or Product
+  detail, never news.
+- Dated evidence older than 100 days is removed before you see it. A fact or post that names a
+  past year for what it describes ("our 2024 award", "in 2023 we launched") is rejected as old
+  news; "since 2015" / "founded in 2015" is fine.
+- Recency wording ("just launched", "this week", "now available") fails unless a cited item is
+  dated within the last 60 days.
 - An event, webinar, offer or deadline whose date has passed is rejected: we cannot invite
   followers to it. Use it only as a recap, and only if the evidence reports what happened.
 - Facts listed under ALREADY POSTED were published in earlier runs: do not pick them again, nor

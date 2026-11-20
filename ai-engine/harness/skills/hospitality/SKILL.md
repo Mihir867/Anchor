@@ -7,8 +7,9 @@ schema_types: [Hotel, LodgingBusiness, Resort, Motel, Hostel, BedAndBreakfast, R
 crawl_paths: [/rooms, /rooms-suites, /accommodation, /dining, /restaurants, /offers, /events, /meetings, /weddings, /spa, /press, /awards, /news]
 news_queries:
   - '"{brand_name}" (award OR awards OR "Travelers'' Choice" OR Michelin OR "Condé Nast") {current_year}'
-  - '"{brand_name}" (opens OR reopening OR renovation OR "new restaurant" OR chef OR menu)'
-  - '"{brand_name}" (wedding OR conference OR festival OR "special event" OR package)'
+  - '"{brand_name}" (opens OR reopening OR renovation OR "new restaurant" OR chef OR menu) {current_year}'
+  - '"{brand_name}" (wedding OR conference OR festival OR "special event" OR package) {current_year}'
+time_sensitive: [Award, Opening]
 post_types: [Award, Opening, Dining spotlight, Guest experience, Planner brief, Offer, Behind the scenes, Local guide, Guest review, Sustainability]
 banned_phrases: [paradise found, escape to an oasis, memories that last a lifetime, home away from home, dive into luxury, world-class amenities, hidden gem, nestled, tranquil oasis, unparalleled luxury]
 ---
@@ -20,9 +21,10 @@ hospitality peers. They already know the property; give them a reason to come ba
 event or share it.
 
 ## Post types (set `category` to one of these)
-- **Award**: a recognition named exactly as the evidence names it, with year if stated.
+- **Award**: a recognition named exactly as the evidence names it. Needs a dated item from the
+  last 60 days; last year's award is old news.
 - **Opening**: an opening, reopening, renovation, new restaurant, chef or menu. Needs a dated
-  item from the last 18 months.
+  item from the last 60 days.
 - **Dining spotlight**: one dish, menu, bar or chef detail, sensory and specific.
 - **Guest experience**: one room, view, spa treatment or ritual, told through its true details.
 - **Planner brief**: capacities and logistics for MICE and wedding planners: rooms, ballroom

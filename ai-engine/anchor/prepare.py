@@ -20,7 +20,7 @@ from . import crawl, extract, harness, history, market, progress, research
 from .config import Settings
 from .llm import LLM, LLMError
 from .models import BrandKit, Evidence, SkillChoice, TaskPack
-from .verify import dominant_script
+from .verify import age_days, dominant_script
 
 log = logging.getLogger("anchor.prepare")
 MIN_EVIDENCE = 4
@@ -140,8 +140,12 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
             progress.report("researching", competitors=[c.domain for c in intel.competitors],
                             search_keywords=len(intel.brand_keywords) + len(intel.gap_keywords))
 
-    crawled = site_items + news_items
-    pooled = _pooled_evidence(cfg, domain, crawled)
+    crawled, stale = fresh_only(site_items + news_items, home.url, cfg.evidence_max_days)
+    pooled, stale_pooled = fresh_only(_pooled_evidence(cfg, domain, crawled), home.url, cfg.evidence_max_days)
+    stale += stale_pooled
+    if stale:
+        log.info("[prepare] dropped %d dated item(s) older than %d days (nobody posts old news)",
+                 stale, cfg.evidence_max_days)
     try:  # remember this crawl for the brand's next runs (before _rank is popped below)
         history.record_evidence(cfg, domain, crawled)
     except Exception as exc:
@@ -183,6 +187,7 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
         market_note=market_note, language=language,
         already_posted=[p_["headline"] for p_ in history.load(cfg, domain)],
         thin=bool(thin_reason), thin_reason=thin_reason, pooled_evidence=used_pool,
+        stale_dropped=stale,
     )
     log.info("[prepare] market context %s", market_note)
     write_pack(pack, pack_dir, extras.get("customers", []))
@@ -199,6 +204,15 @@ def thin_pack(evidence: list[Evidence], cfg: Settings) -> str:
     if articles == 0 and len(evidence) < cfg.thin_evidence:
         return f"{len(evidence)} evidence item(s) and no press (threshold {cfg.thin_evidence})"
     return ""
+
+
+def fresh_only(items: list[dict], home_url: str, max_days: int) -> tuple[list[dict], int]:
+    """Drop items dated more than `max_days` ago (an old blog post, press piece or changelog
+    entry). Undated items stay: they are live site copy, usable for evergreen posts. The home
+    page is live by definition, so a stray <time> on it (a blog teaser) never drops it."""
+    home = home_url.rstrip("/")
+    keep = [d for d in items if (d.get("url") or "").rstrip("/") == home or (age_days(d.get("date")) or 0) <= max_days]
+    return keep, len(items) - len(keep)
 
 
 def _pooled_evidence(cfg: Settings, domain: str, crawled: list[dict]) -> list[dict]:

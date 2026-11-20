@@ -7,8 +7,9 @@ schema_types: [Product, ProductGroup, Offer, AggregateOffer, Store, OnlineStore,
 crawl_paths: [/collections, /products, /shop, /new, /bestsellers, /reviews, /about, /sustainability, /press, /stores]
 news_queries:
   - '"{brand_name}" (launch OR collection OR collaboration OR collab OR "pop-up") {current_year}'
-  - '"{brand_name}" (funding OR expands OR stores OR retail OR acquisition)'
-  - '"{brand_name}" (sustainability OR certified OR award OR review)'
+  - '"{brand_name}" (funding OR expands OR stores OR retail OR acquisition) {current_year}'
+  - '"{brand_name}" (sustainability OR certified OR award OR review) {current_year}'
+time_sensitive: [Collection drop, Store news]
 post_types: [Collection drop, Product detail, How to use, Review spotlight, Behind the product, Credential, Store news, Milestone, Answer]
 banned_phrases: [must-have, holy grail, game changer, obsessed, you need this, flying off the shelves, selling out fast, limited time only]
 ---
@@ -20,7 +21,7 @@ detail, real reviews, how to get more out of what they bought and the story behi
 
 ## Post types (set `category` to one of these)
 - **Collection drop**: a launch, collection or collaboration with named partners. Needs a dated
-  item from the last 18 months.
+  item from the last 60 days; an older collection is a Product detail, not a drop.
 - **Product detail**: one product's specifics shoppers decide on: material, ingredient, fit,
   origin, price as listed.
 - **How to use**: care, styling, routine or usage tips the evidence gives.

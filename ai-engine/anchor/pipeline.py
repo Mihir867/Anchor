@@ -13,6 +13,7 @@ from . import harness as harness_mod
 from .llm import LLM, model_status, reset_usage, usage_snapshot
 from .models import RolloutResult
 from .prepare import prepare
+from .verify import age_days
 
 log = logging.getLogger("anchor.pipeline")
 
@@ -126,12 +127,16 @@ def finalize(pack, run_dir: Path, chosen: Path, harness_used: Path, cfg: Setting
     rejected = [c for c in result.cards if c.status != "verified"]
     fallback_n = sum(c.fallback for c in result.verified)
     verified_n = len(result.verified) - fallback_n
+    recent = sum(age is not None and age <= cfg.news_max_days for age in (age_days(e.date) for e in pack.evidence))
     report = [
         f"# Run report — {pack.brand.name}", "",
         f"- url: {pack.url}", f"- industry playbook: `{pack.industry}` ({pack.industry_reason})",
         f"- evidence: {len(pack.evidence)} items from {len(pack.pages_crawled)} pages "
         f"({sum(e.kind == 'article' for e in pack.evidence)} from press"
         + (f", {pack.pooled_evidence} carried over from earlier runs" if pack.pooled_evidence else "") + ")",
+        f"- freshness: {pack.stale_dropped} dated item(s) older than {cfg.evidence_max_days} days left out; "
+        + (f"{recent} item(s) dated within the last {cfg.news_max_days} days" if recent else
+           f"no news from the last {cfg.news_max_days} days, so posts are evergreen (no release/partnership/award posts)"),
         *([f"- thin evidence: {pack.thin_reason}; wrote 1 post from the best fact"] if pack.thin else []),
         f"- mode: {mode}" + (" (selection fell back to best delivered rollout)" if fell_back else ""),
         f"- harness used: `{Path(harness_used).name}` (copied to output/harness/)",

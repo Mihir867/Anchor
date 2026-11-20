@@ -20,7 +20,8 @@ from .config import Settings
 from .llm import LLM, LLMError
 from .models import (Card, CriticReport, Evidence, MinedFact, MinedFacts, PostDraft,
                      RolloutResult, SkillChoice, Slide, TaskPack)
-from .verify import GLOBAL_BANNED, check_fact, check_post, norm, normalize_post, same_topic
+from .verify import (GLOBAL_BANNED, STALE, age_days, check_fact, check_post, norm, normalize_post, same_topic,
+                     stale_years)
 
 log = logging.getLogger("anchor.generate")
 
@@ -51,6 +52,8 @@ MINE_TASK = """STAGE 1 OF 2 -- SELECT FACTS FOR {brand}
 the evidence below, select up to {n} distinct facts that would give those followers something
 new, following the loaded skill's guidance.
 
+Today's date: {today}. Posts go out today, so every fact must be CURRENT: nobody posts old news.
+
 POST TYPES (set `category` to exactly one; use a different type for each fact where the evidence
 allows): {post_types}
 {already_posted}
@@ -62,10 +65,15 @@ Rules for every fact:
   customers, people, places exactly as written. Leave lists empty rather than guess.
 - `headline`: factual, no number or name that is not in the cited items. Not an introduction
   ("Meet...", "X is a platform that...").
-- Types that announce something new (Release, Launch, Opening, Collection drop, News) need a
-  dated item from the last 18 months; undated site copy is a how-to, spotlight or proof point.
-- Prefer specific, recent, third-party-confirmed facts and deeper pages (case studies, blog
-  posts, changelogs, press, reviews) over homepage taglines, which followers already know.
+- Time-sensitive types (news, release, launch, partnership, funding, award, opening, collection
+  drop: {time_sensitive}) need a cited item dated within the last {news_days} days. Older or
+  undated material is never news: use an evergreen type (how-to, spotlight, product detail, our
+  take, answer) for what is still true today.
+- Never pick a fact about something that happened in a past year ("our 2024 award", "in 2023 we
+  launched"): it is old news even when the page is undated.
+- Prefer the most recent dated items, then specific, third-party-confirmed facts and deeper pages
+  (case studies, blog posts, changelogs, press, reviews) over homepage taglines, which followers
+  already know.
 - Never pick two facts about the same topic. Never combine facts from different items into a
   claim neither item makes.
 {market}
@@ -247,7 +255,7 @@ def _batches(pack: TaskPack, size: int, limit: int) -> list[str]:
 
 def mine(pack: TaskPack, system: str, llm: LLM, cfg: Settings, traj: Trajectory,
          batches: range | None = None, known: list[MinedFact] | None = None,
-         types: list[str] | None = None) -> list[MinedFact]:
+         types: list[str] | None = None, time_sensitive: list[str] | None = None) -> list[MinedFact]:
     ev = pack.evidence_by_id()
     want = pack.max_posts * 2
     good: list[MinedFact] = list(known or [])
@@ -261,7 +269,9 @@ def mine(pack: TaskPack, system: str, llm: LLM, cfg: Settings, traj: Trajectory,
         count = block.count("\n\n[E") + 1
         task = MINE_TASK.format(brand=pack.brand.name, n=pack.max_posts, count=count, evidence=block,
                                 market=market_block(pack, "mine"), post_types=", ".join(types or post_types_default()),
-                                already_posted=_already_posted(pack))
+                                already_posted=_already_posted(pack), today=date.today().isoformat(),
+                                news_days=cfg.news_max_days,
+                                time_sensitive=", ".join(time_sensitive or []) or "see the skill")
         traj.action(f"mine batch {b_idx}: up to {pack.max_posts} facts from {count} evidence items")
         feedback = ""
         for round_no in (1, 2):
@@ -272,7 +282,8 @@ def mine(pack: TaskPack, system: str, llm: LLM, cfg: Settings, traj: Trajectory,
                 break
             rejected = []
             for f in got.facts:
-                problems = check_fact(f, ev, pack.brand.name)
+                problems = check_fact(f, ev, pack.brand.name, time_sensitive=time_sensitive,
+                                      news_days=cfg.news_max_days, evidence_days=cfg.evidence_max_days)
                 if not problems and any(same_topic(_topic(f), h) for h in pack.already_posted):
                     problems = ["already posted in an earlier run (same topic); pick a different fact"]
                 if problems:
@@ -296,6 +307,15 @@ def mine(pack: TaskPack, system: str, llm: LLM, cfg: Settings, traj: Trajectory,
     return good[len(known or []):]
 
 
+def time_sensitive_types(h: harness_mod.Harness, skills: list[str]) -> list[str]:
+    """Post types the loaded skills mark as news (only postable while a cited item is recent)."""
+    out: list[str] = []
+    for name in skills:
+        if name in h.skills:
+            out += [t for t in h.skills[name].list_meta("time_sensitive") if t not in out]
+    return out
+
+
 def post_types_default() -> list[str]:
     return ["Customer story", "Feature how-to", "Proof point", "Release", "Partnership", "Our take"]
 
@@ -312,7 +332,7 @@ def _same(a: MinedFact, b: MinedFact) -> bool:
 
 def rank(facts: list[MinedFact], ev: dict[str, Evidence], n: int,
          terms: dict[str, float] | None = None, home_url: str = "") -> list[MinedFact]:
-    """Recency, specificity and third-party proof; with market context, plus up to +1.5 for a
+    """Freshness, specificity and third-party proof; with market context, plus up to +1.5 for a
     fact about what the audience searches for (weighted by search volume). Homepage hero copy
     ranks lower (followers already know it). The order is then picked greedily so the first
     posts use different post types and never repeat a topic."""
@@ -328,12 +348,13 @@ def rank(facts: list[MinedFact], ev: dict[str, Evidence], n: int,
 
     def value(f: MinedFact) -> float:
         cited = [ev[i] for i in f.evidence_ids if i in ev]
-        dates = [date.fromisoformat(e.date) for e in cited if e.date and re.fullmatch(r"\d{4}-\d{2}-\d{2}", e.date)]
-        if dates:
-            age = (today - max(dates)).days
-            recency = 3.0 if age <= 365 else 2.0 if age <= 730 else 1.0
+        ages = [a for a in (age_days(e.date, today) for e in cited) if a is not None]
+        if ages:
+            # Steep: last month's news beats everything; undated live copy beats anything stale.
+            age = min(ages)
+            recency = 3.0 if age <= 30 else 2.2 if age <= 60 else 1.4 if age <= 100 else -2.0
         else:
-            recency = 0.8
+            recency = 1.0
         third_party = 1.2 if any(e.kind == "article" for e in cited) else 0.0
         proof = 0.6 if any(e.kind in ("testimonial", "structured") for e in cited) else 0.0
         hero = -1.0 if home and cited and all(e.kind == "site" and e.url.rstrip("/") == home for e in cited) else 0.0
@@ -390,7 +411,8 @@ def write_card(idx: int, fact: MinedFact, pack: TaskPack, h: harness_mod.Harness
             break
         draft = normalize_post(draft, fact, cfg.detail_slides, pack.brand.name)
         problems = check_post(draft, fact, sources, pack.brand.name, banned, cfg.detail_slides, pack.script,
-                              competitors=rivals, language=pack.language)
+                              competitors=rivals, language=pack.language, news_days=cfg.news_max_days,
+                              evidence_days=cfg.evidence_max_days)
         soft = []
         if not problems:
             problems, soft = _critic(draft, sources, skill_text, critic, idx, traj)
@@ -454,7 +476,8 @@ def generate(pack: TaskPack, harness_dir: Path, out_dir: Path, cfg: Settings) ->
     if pack.already_posted:
         traj.observe(f"{len(pack.already_posted)} headlines already posted for this brand in earlier runs; "
                      "they are excluded")
-    facts = mine(pack, system, writer, cfg, traj, types=types)
+    urgent = time_sensitive_types(h, skills)
+    facts = mine(pack, system, writer, cfg, traj, types=types, time_sensitive=urgent)
     queue = rank(facts, ev, len(facts), terms, pack.url)
     traj.observe(f"{len(facts)} facts passed checks; target {pack.max_posts} posts (minimum {cfg.min_posts}); "
                  f"order: {[f.headline for f in queue]}")
@@ -467,7 +490,7 @@ def generate(pack: TaskPack, harness_dir: Path, out_dir: Path, cfg: Settings) ->
             if sum(c.status == "verified" for c in cards) >= cfg.min_posts or next_batch >= total_batches:
                 break
             traj.action(f"backfill: only {sum(c.status == 'verified' for c in cards)} verified; mining more evidence")
-            more = mine(pack, system, writer, cfg, traj, range(next_batch, next_batch + 2), facts, types)
+            more = mine(pack, system, writer, cfg, traj, range(next_batch, next_batch + 2), facts, types, urgent)
             next_batch += 2
             facts += more
             queue = rank(more, ev, len(more), terms, pack.url)
@@ -508,13 +531,16 @@ def ensure_post(result: RolloutResult, pack: TaskPack, harness_dir: Path, cfg: S
     Fallback posts carry `fallback=True` and a note telling the reader to review them."""
     if result.verified:
         return result
-    drafted = [c for c in result.cards if c.post is not None]
+    # Never deliver an old-news draft, even as a fallback: an evergreen post is written instead.
+    drafted = [c for c in result.cards if c.post is not None and not any(p.startswith(STALE) for p in c.problems)]
+    if len(drafted) < sum(c.post is not None for c in result.cards):
+        traj.observe("fallback skips draft(s) rejected as old news; an evergreen post is used instead")
     if drafted:
         card = min(drafted, key=lambda c: len(c.problems))
         _mark_fallback(card)
         traj.observe(f"no verified post; delivering {card.id} as a fallback ({len(card.problems)} unresolved problems)")
         return result
-    fact = _intro_fact(pack)
+    fact = _intro_fact(pack, cfg.evidence_max_days)
     card: Card | None = None
     try:
         h = harness_mod.load(harness_dir)
@@ -541,14 +567,20 @@ def _mark_fallback(card: Card) -> None:
     card.notes = [FALLBACK_NOTE] + [f"unconfirmed: {p}" for p in card.problems[:5]]
 
 
-def _intro_fact(pack: TaskPack) -> MinedFact:
-    """Last-resort fact: the most specific item the brand published itself (not a homepage
-    tagline), posted as a spotlight on that detail rather than an introduction."""
+def _intro_fact(pack: TaskPack, max_days: int = 100) -> MinedFact:
+    """Last-resort fact: the most specific CURRENT item the brand published itself (not a homepage
+    tagline, nothing dated or describing a year older than `max_days`), posted as an evergreen
+    spotlight on that detail rather than an introduction."""
     from .extract import informativeness
 
     b = pack.brand
     home = b.url.rstrip("/")
-    own = [e for e in pack.evidence if e.kind != "article"] or list(pack.evidence)
+
+    def current(e: Evidence) -> bool:
+        return (age_days(e.date) or 0) <= max_days and not stale_years(e.text, max_days=max_days)
+
+    own = ([e for e in pack.evidence if e.kind != "article" and current(e)]
+           or [e for e in pack.evidence if current(e)] or list(pack.evidence))
     own.sort(key=lambda e: (e.url.rstrip("/") != home, informativeness(e.text)), reverse=True)
     cited = own[:1]
     first = cited[0].text if cited else (b.description or b.tagline or b.name)

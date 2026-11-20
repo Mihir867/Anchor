@@ -112,15 +112,60 @@ def numbers(text: str) -> set[tuple[float, bool]]:
     return found
 
 
-# Post types that announce something new: they need a dated, recent cited item, otherwise undated
-# site copy ("an AI platform that connects budgeting...") gets dressed up as a launch.
-ANNOUNCING = re.compile(r"\b(launch\w*|release\w*|new\b|announce\w*|opening|opens|reopen\w*|drop|"
-                        r"general availability|now available|news)\b", re.I)
-RECENT_DAYS = 548  # ~18 months
+# ---- freshness -------------------------------------------------------------------------
+# Nobody posts old news. Time-sensitive post types need a cited item dated within NEWS_DAYS
+# (otherwise undated site copy gets dressed up as a launch, or a 2024 partnership is posted as
+# news); no post may cite a dated item older than EVIDENCE_DAYS. Defaults mirror Settings
+# (ANCHOR_NEWS_MAX_DAYS / ANCHOR_EVIDENCE_MAX_DAYS).
+NEWS_DAYS = 60
+EVIDENCE_DAYS = 100
+TIME_SENSITIVE = re.compile(r"\b(launch\w*|release\w*|new\b|news|announce\w*|opening|opens|reopen\w*|drop|"
+                            r"general availability|now available|partner\w*|collab\w*|funding|raise[sd]?|"
+                            r"acqui\w*|award\w*|appoint\w*|expan\w*)\b", re.I)
+STALE = "stale:"  # prefix of every freshness problem (ensure_post never delivers those drafts)
 
 
-def announces(category: str) -> bool:
-    return bool(ANNOUNCING.search(category or ""))
+def announces(category: str, listed: list[str] | None = None) -> bool:
+    """Is this post type time-sensitive (only worth posting while the news is fresh)? The loaded
+    skills' `time_sensitive` lists name them; the pattern catches anything a model spells differently."""
+    if listed and norm(category) in {norm(t) for t in listed}:
+        return True
+    return bool(TIME_SENSITIVE.search(category or ""))
+
+
+def age_days(iso: str | None, today: date | None = None) -> int | None:
+    """Days since an ISO date (YYYY-MM-DD...), or None when it is missing or unparseable."""
+    try:
+        return ((today or date.today()) - date.fromisoformat((iso or "")[:10])).days
+    except ValueError:
+        return None
+
+
+_YEAR = re.compile(r"(?<![\d,.])(19[5-9]\d|20\d\d)(?![\d,])")
+# "since 2015", "founded in 2012", "© 2021": heritage and footers, not a dated claim.
+_HERITAGE = re.compile(r"(since|founded|established|est\.?|started|began|founding|©|copyright|\(c\))\s*(in\s+)?$", re.I)
+
+
+def stale_years(text: str, today: date | None = None, max_days: int = EVIDENCE_DAYS) -> list[int]:
+    """Years written in the text whose whole calendar year ended more than `max_days` ago
+    ("our 2024 award", "in 2023 we launched"): the thing described is old news."""
+    today = today or date.today()
+    out = set()
+    for m in _YEAR.finditer(text or ""):
+        y = int(m.group(1))
+        if y >= today.year or (today - date(y, 12, 31)).days <= max_days:
+            continue
+        if _HERITAGE.search(text[max(0, m.start() - 20):m.start()]):
+            continue
+        out.add(y)
+    return sorted(out)
+
+
+# Wording that tells followers something just happened.
+_RECENCY = re.compile(r"\b(just (?:launched|released|announced|shipped|opened|rolled out|landed|added|unveiled)|"
+                      r"(?:earlier )?this (?:week|month)|today,? we|recently (?:launched|released|announced|added|"
+                      r"shipped|opened|unveiled)|(?:is|are) now (?:live|available)|now available|hot off the press|"
+                      r"brand[- ]new)\b", re.I)
 
 
 def newest_date(items: list[Evidence]) -> date | None:
@@ -166,7 +211,10 @@ def dates_in(text: str) -> list[date]:
     return found
 
 
-def check_fact(fact: MinedFact, ev: dict[str, Evidence], brand: str = "", today: date | None = None) -> list[str]:
+def check_fact(fact: MinedFact, ev: dict[str, Evidence], brand: str = "", today: date | None = None,
+               time_sensitive: list[str] | None = None, news_days: int = NEWS_DAYS,
+               evidence_days: int = EVIDENCE_DAYS) -> list[str]:
+    today = today or date.today()
     problems: list[str] = []
     cited = [ev[i] for i in fact.evidence_ids if i in ev]
     unknown = [i for i in fact.evidence_ids if i not in ev]
@@ -188,19 +236,29 @@ def check_fact(fact: MinedFact, ev: dict[str, Evidence], brand: str = "", today:
     missing = numbers(fact.headline) - numbers(corpus)
     if missing:
         problems.append(f"headline states numbers not in evidence: {_fmt(missing)}")
-    if announces(fact.category):
+    old = [e for e in cited if (age_days(e.date, today) or 0) > evidence_days]
+    if old:
+        problems.append(
+            f"{STALE} cites {', '.join(f'{e.id} ({e.date})' for e in old)}, older than {evidence_days} days; "
+            "followers want what is current, so pick a fact from recent or undated live material")
+    if announces(fact.category, time_sensitive):
         newest = newest_date(cited)
-        if newest is None or ((today or date.today()) - newest).days > RECENT_DAYS:
+        if newest is None or (today - newest).days > news_days:
             problems.append(
-                f"post type {fact.category!r} announces something new, but no cited item is dated within "
-                f"the last 18 months ({'newest is ' + newest.isoformat() if newest else 'all are undated'}); "
-                "pick a post type for existing material instead (e.g. Feature how-to, Proof point, "
-                "Product detail) or cite the dated announcement")
+                f"{STALE} post type {fact.category!r} is news, but no cited item is dated within the last "
+                f"{news_days} days ({'newest is ' + newest.isoformat() if newest else 'all are undated'}); "
+                "nobody posts old news: pick an evergreen post type for current material instead (e.g. "
+                "Feature how-to, Spotlight, Product detail, Our take) or cite a recent dated announcement")
+    years = stale_years(f"{fact.headline} {fact.quote}", today, evidence_days)
+    if years:
+        problems.append(
+            f"{STALE} the fact is about {', '.join(map(str, years))}, which is old news; pick a current fact "
+            "(a founding year with 'since'/'founded' is fine)")
     if TIMED.search(fact.category or "") or TIMED.search(fact.headline or ""):
         # An event or offer is only worth inviting people to while its date is ahead.
         when = dates_in(" ".join([fact.headline, fact.quote] + [e.text for e in cited]))
-        if when and max(when) < (today or date.today()):
-            problems.append(f"the {fact.category or 'event'} took place on {max(when).isoformat()}, which has passed; "
+        if when and max(when) < today:
+            problems.append(f"{STALE} the {fact.category or 'event'} took place on {max(when).isoformat()}, which has passed; "
                             "pick a current fact (a past event is only usable as a recap of what happened there, "
                             "if the evidence reports it)")
     # Off-site articles often discuss other companies; on-site pages are about the brand by default.
@@ -327,7 +385,9 @@ def _sign_off(text: str, line: str) -> str:
 
 def check_post(post: PostDraft, fact: MinedFact, sources: list[Evidence], brand_name: str,
                banned: list[str], detail_slides: int = 2, script: str = "LATIN",
-               competitors: list[str] | None = None, language: str = "en") -> list[str]:
+               competitors: list[str] | None = None, language: str = "en", today: date | None = None,
+               news_days: int = NEWS_DAYS, evidence_days: int = EVIDENCE_DAYS) -> list[str]:
+    today = today or date.today()
     problems: list[str] = []
     corpus = " ".join(norm(f"{e.text} {e.title} {e.date or ''}") for e in sources) + " " + norm(brand_name)
     allowed = numbers(corpus)
@@ -349,6 +409,10 @@ def check_post(post: PostDraft, fact: MinedFact, sources: list[Evidence], brand_
             problems.append(f"{field_name} uses banned phrases: {hits}")
         if _PLACEHOLDER.search(text or ""):
             problems.append(f"{field_name} contains a placeholder or template token")
+        years = stale_years(text, today, evidence_days)
+        if years:
+            problems.append(f"{STALE} {field_name} dates what it describes to {', '.join(map(str, years))}, which is "
+                            "old news; leave the old year out and keep only what is still true today")
         foreign = foreign_text(text, script)
         if foreign:
             problems.append(
@@ -396,6 +460,12 @@ def check_post(post: PostDraft, fact: MinedFact, sources: list[Evidence], brand_
     if named:
         problems.append(f"names competitor(s) {named} that the cited evidence does not mention; "
                         "describe what the brand does instead of comparing")
+    # "Just launched", "this week", "now available": only true when a cited item is recent.
+    newest = newest_date(sources)
+    hit = _RECENCY.search(everything)
+    if hit and (newest is None or (today - newest).days > news_days):
+        problems.append(f"{STALE} says {hit.group(0)!r}, but no cited item is dated within the last {news_days} "
+                        "days; drop the recency wording and present it as what we offer today")
     if brand_name and norm(brand_name) not in norm(li + " " + cap):
         problems.append(f"neither post names the brand {brand_name!r}")
     if brand_name:
