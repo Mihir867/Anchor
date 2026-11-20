@@ -480,7 +480,7 @@ def generate(pack: TaskPack, harness_dir: Path, out_dir: Path, cfg: Settings) ->
                         verified=sum(c.status == "verified" for c in cards), facts=len(facts))
         cards.append(write_card(len(cards) + 1, fact, pack, h, skills, writer, critic, cfg, traj))
     verified_n = sum(c.status == "verified" for c in cards)
-    if verified_n < cfg.min_posts:
+    if verified_n < min(cfg.min_posts, pack.max_posts):
         traj.observe(f"only {verified_n} post(s) could be grounded (minimum {cfg.min_posts}); the evidence "
                      "pack does not support more without inventing details")
     result = RolloutResult(task_id=pack.task_id, brand=pack.brand.name, industry=pack.industry,

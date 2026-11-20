@@ -140,7 +140,13 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
             progress.report("researching", competitors=[c.domain for c in intel.competitors],
                             search_keywords=len(intel.brand_keywords) + len(intel.gap_keywords))
 
-    ranked = sorted(site_items + news_items, key=lambda d: d.pop("_rank", 0), reverse=True)[:70]
+    crawled = site_items + news_items
+    pooled = _pooled_evidence(cfg, domain, crawled)
+    try:  # remember this crawl for the brand's next runs (before _rank is popped below)
+        history.record_evidence(cfg, domain, crawled)
+    except Exception as exc:
+        log.warning("[prepare] could not save the evidence pool: %s", exc)
+    ranked = sorted(crawled + pooled, key=lambda d: d.pop("_rank", 0), reverse=True)[:70]
     if len(ranked) < MIN_EVIDENCE:
         # Thin site (mostly images, heavy JS, little copy). Still deliver: the home page's own
         # title/description/headline become citable items, and generate.ensure_post guarantees
@@ -148,7 +154,13 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
         log.warning("[prepare] little material for %s: %d site items from %d pages, %d news items; "
                     "continuing with home-page basics", url, len(site_items), 1 + len(pages), len(news_items))
         ranked += _home_basics(home, name, domain, {norm_key(d["text"]) for d in ranked})
+    used_pool = sum(1 for d in ranked if d.pop("_pooled", False))
     evidence = [Evidence(id=f"E{i}", **d) for i, d in enumerate(ranked, start=1)]
+    thin_reason = thin_pack(evidence, cfg)
+    if thin_reason:
+        log.warning("[prepare] thin pack for %s: %s; writing 1 post from the best fact, no refine",
+                    domain, thin_reason)
+        max_posts = 1
 
     t = home.tokens
     colors = t.get("ranked_colors") or []
@@ -170,14 +182,45 @@ def prepare(url: str, cfg: Settings, max_posts: int = 3, task_id: str | None = N
         evidence=evidence, pages_crawled=[home.url] + [p.url for p in pages], market=intel,
         market_note=market_note, language=language,
         already_posted=[p_["headline"] for p_ in history.load(cfg, domain)],
+        thin=bool(thin_reason), thin_reason=thin_reason, pooled_evidence=used_pool,
     )
     log.info("[prepare] market context %s", market_note)
     write_pack(pack, pack_dir, extras.get("customers", []))
     progress.report("mining", evidence=len(evidence), news=sum(e.kind == "article" for e in evidence))
-    log.info("[prepare] %d evidence items (%d site, %d news) from %d pages",
+    log.info("[prepare] %d evidence items (%d site, %d news, %d pooled from earlier runs) from %d pages",
              len(evidence), sum(e.kind != "article" for e in evidence),
-             sum(e.kind == "article" for e in evidence), len(pack.pages_crawled))
+             sum(e.kind == "article" for e in evidence), used_pool, len(pack.pages_crawled))
     return pack, run_dir
+
+
+def thin_pack(evidence: list[Evidence], cfg: Settings) -> str:
+    """Why this pack is too thin for a full set (and for Harness² refine), or "" if it is not."""
+    articles = sum(e.kind == "article" for e in evidence)
+    if articles == 0 and len(evidence) < cfg.thin_evidence:
+        return f"{len(evidence)} evidence item(s) and no press (threshold {cfg.thin_evidence})"
+    return ""
+
+
+def _pooled_evidence(cfg: Settings, domain: str, crawled: list[dict]) -> list[dict]:
+    """Items from the brand's earlier runs that this crawl did not see, ranked like fresh ones but
+    slightly lower (the page may have changed since)."""
+    try:
+        past = history.load_evidence(cfg, domain)
+    except Exception as exc:
+        log.warning("[prepare] could not load the evidence pool: %s", exc)
+        return []
+    seen = {norm_key(d["text"]) for d in crawled}
+    out = []
+    for d in past:
+        if norm_key(d["text"]) in seen or d.get("kind") not in ("site", "article", "testimonial", "pricing", "structured"):
+            continue
+        seen.add(norm_key(d["text"]))
+        out.append({"kind": d["kind"], "url": d.get("url") or "", "title": d.get("title") or "",
+                    "date": d.get("date"), "text": d["text"], "_pooled": True,
+                    "_rank": extract.informativeness(d["text"]) + (2.5 if d["kind"] == "article" else 0) - 0.5})
+    if out:
+        log.info("[prepare] %d evidence item(s) from earlier runs of %s available", len(out), domain)
+    return out
 
 
 def norm_key(text: str) -> str:

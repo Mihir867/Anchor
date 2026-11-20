@@ -31,6 +31,13 @@ def run(url: str, *, mode: str = "refine", k: int = 1, max_posts: int = 3, indus
             log.warning("[pipeline] %s", skipped)
             mode = "fast"
     pack, run_dir = prepare(url, cfg, max_posts=max_posts, industry=industry)
+    if mode == "refine" and pack.thin:
+        # Rollouts on this little evidence all score ~0, so no edit can beat the base: refining
+        # would cost ~4x the tokens and return the base harness anyway.
+        skipped = (f"Harness² refine skipped: thin evidence pack ({pack.thin_reason}). Ran one "
+                   "base-harness rollout for a single post instead.")
+        log.warning("[pipeline] %s", skipped)
+        mode = "fast"
     stages_note = skipped
     fell_back = False
     if mode == "fast":
@@ -117,7 +124,9 @@ def finalize(pack, run_dir: Path, chosen: Path, harness_used: Path, cfg: Setting
         f"# Run report — {pack.brand.name}", "",
         f"- url: {pack.url}", f"- industry playbook: `{pack.industry}` ({pack.industry_reason})",
         f"- evidence: {len(pack.evidence)} items from {len(pack.pages_crawled)} pages "
-        f"({sum(e.kind == 'article' for e in pack.evidence)} from press)",
+        f"({sum(e.kind == 'article' for e in pack.evidence)} from press"
+        + (f", {pack.pooled_evidence} carried over from earlier runs" if pack.pooled_evidence else "") + ")",
+        *([f"- thin evidence: {pack.thin_reason}; wrote 1 post from the best fact"] if pack.thin else []),
         f"- mode: {mode}" + (" (selection fell back to best delivered rollout)" if fell_back else ""),
         f"- harness used: `{Path(harness_used).name}` (copied to output/harness/)",
         f"- posts verified: {verified_n} / {len(result.cards)}"

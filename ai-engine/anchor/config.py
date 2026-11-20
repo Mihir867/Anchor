@@ -74,6 +74,11 @@ class Settings:
     repair_rounds: int = field(default_factory=lambda: int(_env("ANCHOR_REPAIR_ROUNDS", "2")))
     max_extra_posts: int = field(default_factory=lambda: int(_env("ANCHOR_MAX_EXTRA_POSTS", "2")))
     min_posts: int = field(default_factory=lambda: int(_env("ANCHOR_MIN_POSTS", "2")))
+    # A pack with fewer evidence items than this and no press is "thin": 1 post, no refine.
+    thin_evidence: int = field(default_factory=lambda: int(_env("ANCHOR_THIN_EVIDENCE", "20")))
+    # Evidence seen on a brand's earlier runs within this many days is pooled into new runs
+    # (crawls of the same site see different pages). 0 turns pooling off.
+    evidence_pool_days: float = field(default_factory=lambda: float(_env("ANCHOR_EVIDENCE_POOL_DAYS", "60")))
     detail_slides: int = field(default_factory=lambda: int(_env("ANCHOR_DETAIL_SLIDES", "2")))
     # DataForSEO (optional): competitors, search demand and content gaps (market.py), plus Google
     # News results for press research. Unset login/password = the step is skipped.

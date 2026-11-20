@@ -79,12 +79,32 @@ def post(path: str, body: dict, cfg: Settings) -> list[dict]:
             pass
     if _blocked:
         return []
+    items = _call(path, payload, cfg, retry=True)
+    if items is _RETRY:
+        time.sleep(2)
+        items = _call(path, payload, cfg, retry=False)
+    if items is None:
+        return []
+    cache.parent.mkdir(parents=True, exist_ok=True)
+    cache.write_text(json.dumps(items), encoding="utf-8")
+    return items
+
+
+_RETRY: list = []  # sentinel: a transient DataForSEO error worth one more try
+# 40101 Internal SE Server Error (the search-engine scrape failed), 50000 internal error,
+# 50301/50401 temporary unavailability: transient on DataForSEO's side.
+_TRANSIENT = {40101, 50000, 50301, 50401}
+
+
+def _call(path: str, payload: list, cfg: Settings, retry: bool):
+    """One live request: its items, None on a lasting failure, or _RETRY on a transient one
+    (only when `retry`; the final attempt reports it as a failure)."""
     try:
         r = httpx.post(f"{API}/{path}", json=payload, timeout=cfg.dataforseo_timeout,
                        auth=(cfg.dataforseo_login, cfg.dataforseo_password))
     except httpx.HTTPError as exc:
         log.warning("DataForSEO %s failed: %s", path, exc)
-        return []
+        return None
     try:
         data = r.json()
     except ValueError:
@@ -94,25 +114,32 @@ def post(path: str, body: dict, cfg: Settings) -> list[dict]:
         # call would fail the same way, so stop calling for the rest of this process.
         _blocked.append(f"{data.get('status_code', r.status_code)} {data.get('status_message', '')}".strip())
         log.warning("DataForSEO disabled for this run: HTTP %s, %s", r.status_code, _blocked[0])
-        return []
+        return None
+    if r.status_code >= 500 and retry:
+        log.info("DataForSEO %s: HTTP %s, retrying once", path, r.status_code)
+        return _RETRY
     if r.status_code != 200:
         log.warning("DataForSEO %s failed: HTTP %s %s", path, r.status_code, data.get("status_message", r.text[:200]))
-        return []
+        return None
     if data.get("status_code") != 20000:
+        if retry and data.get("status_code") in _TRANSIENT:
+            log.info("DataForSEO %s: %s %s, retrying once", path, data.get("status_code"), data.get("status_message"))
+            return _RETRY
         log.warning("DataForSEO %s: %s %s", path, data.get("status_code"), data.get("status_message"))
-        return []
+        return None
     task = (data.get("tasks") or [{}])[0]
     with _cost_lock:
         _cost["calls"] += 1
         _cost["usd"] += float(task.get("cost") or 0)
     if task.get("status_code") != 20000:
+        if retry and task.get("status_code") in _TRANSIENT:
+            log.info("DataForSEO %s task: %s %s, retrying once", path, task.get("status_code"),
+                     task.get("status_message"))
+            return _RETRY
         # 40501/40102 etc.: bad params, no data for this target, out of credit.
         log.warning("DataForSEO %s task: %s %s", path, task.get("status_code"), task.get("status_message"))
-        return []
-    items = [i for res in (task.get("result") or []) if res for i in (res.get("items") or [])]
-    cache.parent.mkdir(parents=True, exist_ok=True)
-    cache.write_text(json.dumps(items), encoding="utf-8")
-    return items
+        return None
+    return [i for res in (task.get("result") or []) if res for i in (res.get("items") or [])]
 
 
 # ---- geography -------------------------------------------------------------------------

@@ -199,6 +199,12 @@ Posts go out on the brand's own channels to people who already follow it, so:
 - **No repeats across runs**: every delivered post is recorded per brand (`anchor/history.py`,
   in Postgres when configured) and later runs skip those topics. `ANCHOR_BRAND_HISTORY=0` turns
   this off.
+- **Evidence pooled across runs**: crawls of the same site read different subpages each time, so
+  every run's site and press items are kept per brand (`history.record_evidence`, Postgres when
+  configured) and later runs add the ones seen within `ANCHOR_EVIDENCE_POOL_DAYS` (60; 0 = off).
+- **Thin packs**: with fewer than `ANCHOR_THIN_EVIDENCE` (20) evidence items and no press, a run
+  writes 1 post from the best fact instead of a weak set, and Harness² refine is skipped (its
+  rollouts would all score ~0, so no edit could be adopted).
 - The crawl goes **one level deeper**: up to `ANCHOR_MAX_ARTICLE_PAGES` (4) individual blog
   posts, case studies, changelog and press entries linked from the index pages, where dated,
   specific stories live.

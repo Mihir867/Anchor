@@ -42,6 +42,8 @@ def refine_saved(run_dir: Path, cfg: Settings, k: int | None = None) -> dict:
     if (run_dir / "h2" / "summary.json").is_file():
         return {"run": run_dir.name, "skipped": "already refined"}
     pack = load_pack(pack_dir)
+    if pack.thin:
+        return {"run": run_dir.name, "skipped": f"thin evidence pack ({pack.thin_reason})"}
     k = k or int(os.environ.get("ANCHOR_REFINE_K", "1") or 1)
     log.info("[background] refining %s (%s, k=%d)", run_dir.name, pack.industry, k)
     outcome = refine(pack, run_dir, cfg, k=k)

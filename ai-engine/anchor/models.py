@@ -91,6 +91,11 @@ class TaskPack(BaseModel):
     market: Optional[MarketIntel] = None  # DataForSEO context, when configured
     market_note: str = ""  # what happened with DataForSEO (off / used / empty / refused), for the report
     already_posted: list[str] = Field(default_factory=list)  # headlines this brand posted in earlier runs
+    # Thin pack (little site copy, no press): one post from the best fact, and no Harness² refine,
+    # because rollouts on so little evidence score ~0 and give the improver nothing to learn from.
+    thin: bool = False
+    thin_reason: str = ""
+    pooled_evidence: int = 0  # evidence items carried over from this brand's earlier runs
 
     def evidence_by_id(self) -> dict[str, Evidence]:
         return {e.id: e for e in self.evidence}
