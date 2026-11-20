@@ -10,7 +10,7 @@ from pathlib import Path
 from . import generate, history, market, progress, render
 from .config import Settings, settings
 from . import harness as harness_mod
-from .llm import LLM, reset_usage, usage_snapshot
+from .llm import LLM, model_status, reset_usage, usage_snapshot
 from .models import RolloutResult
 from .prepare import prepare
 
@@ -22,6 +22,12 @@ def run(url: str, *, mode: str = "refine", k: int = 1, max_posts: int = 3, indus
     """mode="fast": one rollout with the base harness.
     mode="refine": Harness² Propose-Probe-Compose (4k rollouts) with per-industry learning."""
     cfg = cfg or settings()
+    models = model_status(cfg)
+    if not models["ok"]:
+        # A config error, not a bad brand: fail the job instead of delivering template posts.
+        raise RuntimeError("no LLM endpoint for the writer/critic: set "
+                           + (", ".join(models["missing_keys"]) or "the provider API keys")
+                           + " in this service's environment (see README, Models and endpoints)")
     reset_usage()
     market.reset_cost()
     skipped = ""

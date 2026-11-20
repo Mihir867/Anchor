@@ -48,6 +48,7 @@ def test_pooled_evidence_skips_what_this_crawl_already_has(cfg):
 def test_thin_pack_skips_refine(cfg, pack, monkeypatch, tmp_path):
     pack.thin, pack.thin_reason, pack.max_posts = True, "2 evidence item(s) and no press", 1
     calls = []
+    monkeypatch.setattr(pipeline, "model_status", lambda c: {"ok": True})
     monkeypatch.setattr(pipeline, "refine_blocker", lambda c: "")
     monkeypatch.setattr(pipeline, "prepare", lambda *a, **k: (pack, tmp_path))
     monkeypatch.setattr(pipeline.generate, "generate", lambda *a, **k: calls.append("fast"))
@@ -89,3 +90,18 @@ def test_lasting_dataforseo_error_is_not_retried(cfg, monkeypatch):
     market.reset_cost()
     assert market.post("serp/google/news/live/advanced", {"keyword": "acme"}, cfg) == []
     assert len(calls) == 1
+
+
+def test_missing_provider_keys_are_reported_and_fail_the_run(cfg, monkeypatch):
+    import pytest
+    from anchor import llm
+
+    for k in ("GROQ_API_KEY", "GROQ_KEY", "CEREBRAS_API_KEY"):
+        monkeypatch.delenv(k, raising=False)
+    cfg = replace(cfg, model="groq:openai/gpt-oss-120b,cerebras:gpt-oss-120b", critic_model="groq:qwen/qwen3.8-27b",
+                  proposer_model="cerebras:gpt-oss-120b", selector_model="cerebras:qwen-3.8-27b", fallback_models=[])
+    status = llm.model_status(cfg)
+    assert not status["ok"] and status["roles"]["writer"] == []
+    assert status["missing_keys"] == ["GROQ_API_KEY / GROQ_KEY", "CEREBRAS_API_KEY"]
+    with pytest.raises(RuntimeError, match="GROQ_API_KEY / GROQ_KEY"):
+        pipeline.run("https://acme.example", mode="fast", cfg=cfg)

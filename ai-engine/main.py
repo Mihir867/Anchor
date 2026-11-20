@@ -32,6 +32,7 @@ from pydantic import BaseModel, Field
 
 from anchor import progress, storage
 from anchor.config import Settings, settings
+from anchor.llm import model_status
 from anchor.pipeline import run
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s: %(message)s")
@@ -48,6 +49,13 @@ app.add_middleware(
 )
 
 cfg: Settings = settings()
+_models = model_status(cfg)
+if not _models["ok"] or not all(_models["roles"].values()):
+    # Without a writer/critic every run silently degrades to template posts: say so loudly.
+    log.error("LLM roles without a usable endpoint: %s. Set these env vars on this service: %s",
+              [r for r, u in _models["roles"].items() if not u], ", ".join(_models["missing_keys"]) or "-")
+else:
+    log.info("LLM endpoints: %s", {r: u[0] for r, u in _models["roles"].items()})
 runs_dir = cfg.runs_dir
 runs_dir.mkdir(parents=True, exist_ok=True)
 
@@ -180,7 +188,9 @@ def root() -> dict:
 
 @app.get("/health")
 def health() -> dict:
-    return {"status": "ok", "service": "Anchor AI Engine", "version": "2.0.0", "storage": storage.status()}
+    models = model_status(cfg)
+    return {"status": "ok" if models["ok"] else "degraded", "service": "Anchor AI Engine", "version": "2.0.0",
+            "storage": storage.status(), "models": models}
 
 
 @app.get("/runs")

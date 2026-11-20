@@ -100,6 +100,27 @@ def resolve(spec: str, cfg: Settings) -> Endpoint | None:
     return Endpoint(spec, "custom", spec, cfg.base_url, cfg.api_key)
 
 
+def model_status(cfg: Settings) -> dict:
+    """Which model each role can actually reach, and which API keys are missing. A role with no
+    usable endpoint makes every run degrade to template posts, so the API logs this at startup
+    and /health reports it."""
+    roles = {"writer": cfg.model, "critic": cfg.critic_model, "proposer": cfg.proposer_model,
+             "selector": cfg.selector_model}
+    out: dict = {"roles": {}, "missing_keys": []}
+    for role, chain in roles.items():
+        specs = [m.strip() for m in chain.split(",") if m.strip()]
+        specs += [m for m in cfg.fallback_models if m not in specs]
+        usable = [s for s in specs if resolve(s, cfg)]
+        out["roles"][role] = usable
+        for s in specs:
+            prefix = s.partition(":")[0]
+            keys = PROVIDERS.get(prefix, (None, ("ANCHOR_API_KEY",)))[1]
+            if s not in usable and keys and " / ".join(keys) not in out["missing_keys"]:
+                out["missing_keys"].append(" / ".join(keys))
+    out["ok"] = all(out["roles"][r] for r in ("writer", "critic"))
+    return out
+
+
 def _trip(spec: str, seconds: float, why: str) -> None:
     with _trip_lock:
         _tripped[spec] = time.time() + seconds
