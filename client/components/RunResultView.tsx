@@ -40,6 +40,10 @@ export function RunResultView({ result, onClose, fresh }: RunResultViewProps) {
   const copyTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   useEffect(() => setSel(0), [result.task_id]);
+  // On a phone, preview the post the way it will be read there.
+  useEffect(() => {
+    if (window.matchMedia("(max-width: 639px)").matches) setDevice("mobile");
+  }, []);
   useEffect(() => () => {
     if (copyTimer.current) clearTimeout(copyTimer.current);
   }, []);
@@ -140,7 +144,7 @@ export function RunResultView({ result, onClose, fresh }: RunResultViewProps) {
         </div>
       </header>
 
-      <div className="grid lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
+      <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,360px)_minmax(0,1fr)]">
         {/* Left: posts, copy, sources */}
         <aside className="border-b lg:border-b-0 lg:border-r border-border">
           <section className="px-3 pt-4 pb-3" aria-labelledby="posts-h">
@@ -186,7 +190,7 @@ export function RunResultView({ result, onClose, fresh }: RunResultViewProps) {
             <h3 id="copy-h" className="text-[13px] font-medium text-fg-3">
               Copy
             </h3>
-            <div className="mt-2.5 grid grid-cols-2 gap-2">
+            <div className="mt-2.5 grid grid-cols-1 min-[420px]:grid-cols-2 gap-2">
               <Button onClick={() => copy(linkedinText, "li")}>
                 {copied === "li" ? <CheckIcon className="w-3.5 h-3.5" /> : <CopyIcon className="w-3.5 h-3.5" />}
                 {copied === "li" ? "Copied" : "LinkedIn post"}

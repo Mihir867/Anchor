@@ -38,7 +38,7 @@ function normalize(raw: string): string {
 }
 
 const SELECT =
-  "h-8 pointer-coarse:h-11 w-full rounded-md border border-border bg-bg pl-3 pr-8 text-sm text-fg appearance-none cursor-pointer " +
+  "h-11 sm:h-8 sm:pointer-coarse:h-11 w-full rounded-md border border-border bg-bg pl-3 pr-8 text-sm text-fg appearance-none cursor-pointer " +
   "hover:border-border-strong transition-colors duration-[120ms] disabled:text-fg-disabled disabled:cursor-default " +
   "bg-[url('data:image/svg+xml;utf8,<svg xmlns=%22http://www.w3.org/2000/svg%22 viewBox=%220 0 24 24%22 fill=%22none%22 stroke=%22%237b8191%22 stroke-width=%221.5%22 stroke-linecap=%22round%22 stroke-linejoin=%22round%22><path d=%22m6 9 6 6 6-6%22/></svg>')] bg-no-repeat bg-[length:16px] bg-[position:right_8px_center]";
 
@@ -96,11 +96,11 @@ export function HeroSection({ onStart, busy }: HeroSectionProps) {
               setTouched(true);
               setError(validate(url));
             }}
-            className={`flex-1 min-w-0 h-10 pointer-coarse:h-11 rounded-md border bg-bg px-3 text-base sm:text-[15px] text-fg placeholder:text-fg-3 outline-none transition-[border-color,box-shadow] duration-[120ms] ease-out disabled:text-fg-disabled disabled:bg-bg-subtle focus-visible:shadow-[0_0_0_2px_var(--color-accent-subtle)] ${
+            className={`w-full sm:w-auto sm:flex-1 min-w-0 h-12 sm:h-10 sm:pointer-coarse:h-11 rounded-md border bg-bg px-3 text-base sm:text-[15px] text-fg placeholder:text-fg-3 outline-none transition-[border-color,box-shadow] duration-[120ms] ease-out disabled:text-fg-disabled disabled:bg-bg-subtle focus-visible:shadow-[0_0_0_2px_var(--color-accent-subtle)] ${
               error ? "border-danger" : "border-border hover:border-border-strong focus:border-accent"
             }`}
           />
-          <Button type="submit" size="lg" loading={busy} className="sm:w-[148px]">
+          <Button type="submit" size="field" loading={busy} className="w-full sm:w-[148px]">
             {busy ? "Creating" : "Create posts"}
           </Button>
         </div>
@@ -109,7 +109,7 @@ export function HeroSection({ onStart, busy }: HeroSectionProps) {
             (busy ? "Your posts are being created below. You can start another run when this one finishes." : "")}
         </p>
 
-        <div className="mt-2 grid sm:grid-cols-2 gap-4">
+        <div className="mt-2 grid grid-cols-1 sm:grid-cols-2 gap-4">
           <div>
             <label htmlFor="mode" className="block text-[13px] font-medium text-fg-2">
               Mode

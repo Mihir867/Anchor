@@ -164,7 +164,7 @@ export function RunProgress({ state, onReset, onRetry, onCancel }: RunProgressPr
         )}
       </header>
 
-      <div className="grid md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
+      <div className="grid grid-cols-1 md:grid-cols-[minmax(0,1fr)_minmax(0,1.3fr)]">
         {/* Steps */}
         <ol className="px-5 sm:px-6 py-4 md:border-r border-b md:border-b-0 border-border-subtle" aria-label="Steps">
           {STAGES.map((s, i) => {

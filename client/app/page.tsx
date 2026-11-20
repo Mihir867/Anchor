@@ -198,7 +198,7 @@ export default function Home() {
         />
 
         <section id="how-it-works" className="w-full max-w-[1120px] mx-auto px-5 sm:px-8 py-16 sm:py-24 border-t border-border-subtle">
-          <div className="grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] gap-x-16 gap-y-8">
+          <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] gap-x-16 gap-y-8">
             <div>
               <h2 className="text-2xl leading-[1.25] font-semibold tracking-[-0.015em]">How Anchor works</h2>
               <p className="mt-3 max-w-[400px] text-[17px] leading-[1.6] text-fg-2">
@@ -217,11 +217,11 @@ export default function Home() {
             </ol>
           </div>
 
-          <div className="mt-16 sm:mt-24 grid lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] gap-x-16 gap-y-8">
+          <div className="mt-16 sm:mt-24 grid grid-cols-1 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.6fr)] gap-x-16 gap-y-8">
             <h2 className="text-2xl leading-[1.25] font-semibold tracking-[-0.015em]">What you get for each post</h2>
             <dl className="border-t border-border-subtle">
               {OUTPUTS.map((o) => (
-                <div key={o.term} className="grid sm:grid-cols-[228px_minmax(0,1fr)] gap-x-4 gap-y-1 py-5 border-b border-border-subtle">
+                <div key={o.term} className="grid grid-cols-1 sm:grid-cols-[228px_minmax(0,1fr)] gap-x-4 gap-y-1 py-5 border-b border-border-subtle">
                   <dt className="text-sm font-medium text-fg">{o.term}</dt>
                   <dd className="text-sm leading-[1.6] text-fg-2">{o.body}</dd>
                 </div>

@@ -2,7 +2,7 @@ import React from "react";
 import { Spinner } from "./icons";
 
 type Variant = "primary" | "secondary" | "ghost" | "destructive";
-type Size = "sm" | "md" | "lg";
+type Size = "sm" | "md" | "lg" | "field";
 
 const BASE =
   "relative inline-flex items-center justify-center gap-2 rounded-md text-sm font-medium whitespace-nowrap select-none " +
@@ -21,6 +21,8 @@ const SIZES: Record<Size, string> = {
   sm: "h-7 px-2.5 pointer-coarse:h-11",
   md: "h-8 px-3 pointer-coarse:h-11",
   lg: "h-10 px-4 pointer-coarse:h-11",
+  /* matches the hero URL field: 48px on phones, 40px (44px on touch) from sm up */
+  field: "h-12 px-4 sm:h-10 sm:pointer-coarse:h-11",
 };
 
 export function buttonClass(variant: Variant = "primary", size: Size = "md", extra = "") {
